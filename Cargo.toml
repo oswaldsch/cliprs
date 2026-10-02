@@ -8,5 +8,6 @@ ash = { git = "https://github.com/ash-rs/ash", rev = "f4c2ca3e4f6b998d5254ad101a
 bytes = "1.12.1"
 drm = "0.15.0"
 drm-fourcc = "2.2.0"
+evdev = "0.13.2"
 image = "0.25.10"
 mp4 = "0.14.0"
