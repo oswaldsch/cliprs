@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +13,8 @@ pub struct Recording<'a> {
     width: Option<u32>,
     height: Option<u32>,
     encoder: Option<Encoder<'a>>,
-    samples: Vec<Sample>,
+    samples: VecDeque<Sample>,
+    max_frames: usize,
     path: PathBuf,
 }
 
@@ -20,6 +22,7 @@ impl<'a> Recording<'a> {
     pub fn new(
         vk: &'a VulkanDevice,
         fps: u32,
+        max_frames: usize,
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn Error>> {
         Ok(Recording {
@@ -28,7 +31,8 @@ impl<'a> Recording<'a> {
             width: None,
             height: None,
             encoder: None,
-            samples: Vec::new(),
+            samples: VecDeque::new(),
+            max_frames,
             path: path.as_ref().to_path_buf(),
         })
     }
@@ -57,12 +61,23 @@ impl<'a> Recording<'a> {
             .as_mut()
             .expect("encoder is created with the first frame");
 
-        self.samples.push(encoder.encode_frame(frame)?);
+        self.samples.push_back(encoder.encode_frame(frame)?);
+        drop_old_gops(&mut self.samples, self.max_frames);
         Ok(())
     }
 
     pub fn finish(self) -> Result<(), Box<dyn Error>> {
         let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
-        write_mp4(&self.path, &self.samples, width, height, self.fps)
+        let samples = Vec::from(self.samples);
+        write_mp4(&self.path, &samples, width, height, self.fps)
+    }
+}
+
+// A clip is only decodable from an IDR frame, so the front is trimmed one GOP at a time.
+fn drop_old_gops(samples: &mut VecDeque<Sample>, max_frames: usize) {
+    while let Some(next_idr) = samples.iter().skip(1).position(|s| s.is_idr).map(|p| p + 1)
+        && samples.len() - next_idr >= max_frames
+    {
+        samples.drain(..next_idr);
     }
 }

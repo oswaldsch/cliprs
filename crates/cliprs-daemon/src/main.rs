@@ -15,9 +15,11 @@ use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
 const TARGET_FPS: u32 = 60;
+const CLIP_SECONDS: u32 = 30;
 
 fn recording_loop(card: &kms::Card, vk: &vulkan::VulkanDevice) -> Result<(), Box<dyn Error>> {
-    let mut recording = stitch::Recording::new(vk, TARGET_FPS, "clip.mp4")?;
+    let max_frames = (CLIP_SECONDS * TARGET_FPS) as usize;
+    let mut recording = stitch::Recording::new(vk, TARGET_FPS, max_frames, "clip.mp4")?;
     let interval = Duration::from_secs_f64(1.0 / TARGET_FPS as f64);
     let start = Instant::now();
     let record_hotkey = hotkeys::hotkey_presses(KeyCode::KEY_F8);

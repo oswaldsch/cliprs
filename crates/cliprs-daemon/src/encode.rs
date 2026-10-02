@@ -11,7 +11,9 @@ const ENCODABLE_FORMATS: [vk::Format; 2] =
 const DPB_FORMAT: vk::Format = vk::Format::G8_B8R8_2PLANE_420_UNORM;
 const DPB_SLOTS: usize = 2;
 const GOP_LENGTH: u32 = 120;
-const CONSTANT_QP: i32 = 24;
+const AVERAGE_BITRATE: u64 = 30_000_000;
+const PEAK_BITRATE: u64 = 60_000_000;
+const RATE_WINDOW_MS: u32 = 1000;
 const BITSTREAM_CAPACITY: u64 = 8 * 1024 * 1024;
 const NO_REFERENCE: u8 = 0xFF;
 
@@ -236,6 +238,7 @@ pub struct Encoder<'a> {
     video_queue: khr::video_queue::Device,
     video_encode_queue: khr::video_encode_queue::Device,
     extent: vk::Extent2D,
+    fps: u32,
     picture_format: vk::Format,
     staging: Option<Staging>,
     session: vk::VideoSessionKHR,
@@ -298,6 +301,7 @@ impl<'a> Encoder<'a> {
             video_queue,
             video_encode_queue,
             extent,
+            fps,
             picture_format,
             staging: None,
             session,
@@ -408,13 +412,16 @@ impl<'a> Encoder<'a> {
         let begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.session)
             .video_session_parameters(self.parameters);
-        let mut rate_control = disabled_rate_control();
+        let layers = rate_control_layers(self.fps);
+        let mut rate_control = rate_control(&layers);
+        let mut h264_rate_control = h264_rate_control();
         let control_info = vk::VideoCodingControlInfoKHR::default()
             .flags(
                 vk::VideoCodingControlFlagsKHR::RESET
                     | vk::VideoCodingControlFlagsKHR::ENCODE_RATE_CONTROL,
             )
-            .push(&mut rate_control);
+            .push(&mut rate_control)
+            .push(&mut h264_rate_control);
         let end_info = vk::VideoEndCodingInfoKHR::default();
         let begin_cb = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -502,7 +509,6 @@ impl<'a> Encoder<'a> {
             native::StdVideoH264DisableDeblockingFilterIdc_STD_VIDEO_H264_DISABLE_DEBLOCKING_FILTER_IDC_DISABLED;
 
         let slices = [vk::VideoEncodeH264NaluSliceInfoKHR::default()
-            .constant_qp(CONSTANT_QP)
             .std_slice_header(&slice_header)];
         let mut h264_picture = vk::VideoEncodeH264PictureInfoKHR::default()
             .nalu_slice_entries(&slices)
@@ -570,12 +576,15 @@ impl<'a> Encoder<'a> {
             .reference_slots(&encode_ref_slots)
             .push(&mut h264_picture);
 
-        let mut rate_control = disabled_rate_control();
+        let layers = rate_control_layers(self.fps);
+        let mut rate_control = rate_control(&layers);
+        let mut h264_rate_control = h264_rate_control();
         let begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.session)
             .video_session_parameters(self.parameters)
             .reference_slots(&begin_slots)
-            .push(&mut rate_control);
+            .push(&mut rate_control)
+            .push(&mut h264_rate_control);
 
         let acquire = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
@@ -861,6 +870,13 @@ fn query_capabilities(
         {
             return Err("encoder lacks BT.709 narrow range RGB conversion".into());
         }
+        if !encode
+            .rate_control_modes
+            .contains(vk::VideoEncodeRateControlModeFlagsKHR::VBR)
+            || encode.max_bitrate < PEAK_BITRATE
+        {
+            return Err("encoder lacks VBR rate control at the configured bitrate".into());
+        }
 
         Ok(Capabilities {
             max_level_idc: h264.max_level_idc,
@@ -1088,9 +1104,33 @@ fn find_device_local(vk: &VulkanDevice, type_bits: u32) -> Result<u32, Box<dyn E
         .ok_or("no device-local memory type".into())
 }
 
-fn disabled_rate_control() -> vk::VideoEncodeRateControlInfoKHR<'static> {
+fn rate_control_layers(fps: u32) -> [vk::VideoEncodeRateControlLayerInfoKHR<'static>; 1] {
+    [vk::VideoEncodeRateControlLayerInfoKHR::default()
+        .average_bitrate(AVERAGE_BITRATE)
+        .max_bitrate(PEAK_BITRATE)
+        .frame_rate_numerator(fps)
+        .frame_rate_denominator(1)]
+}
+
+fn rate_control<'a>(
+    layers: &'a [vk::VideoEncodeRateControlLayerInfoKHR<'a>],
+) -> vk::VideoEncodeRateControlInfoKHR<'a> {
     vk::VideoEncodeRateControlInfoKHR::default()
-        .rate_control_mode(vk::VideoEncodeRateControlModeFlagsKHR::DISABLED)
+        .rate_control_mode(vk::VideoEncodeRateControlModeFlagsKHR::VBR)
+        .layers(layers)
+        .virtual_buffer_size_in_ms(RATE_WINDOW_MS)
+        .initial_virtual_buffer_size_in_ms(RATE_WINDOW_MS / 2)
+}
+
+fn h264_rate_control() -> vk::VideoEncodeH264RateControlInfoKHR<'static> {
+    vk::VideoEncodeH264RateControlInfoKHR::default()
+        .flags(
+            vk::VideoEncodeH264RateControlFlagsKHR::REGULAR_GOP
+                | vk::VideoEncodeH264RateControlFlagsKHR::REFERENCE_PATTERN_FLAT,
+        )
+        .gop_frame_count(GOP_LENGTH)
+        .idr_period(GOP_LENGTH)
+        .temporal_layer_count(1)
 }
 
 fn color_range() -> vk::ImageSubresourceRange {
@@ -1111,6 +1151,8 @@ fn align_up(value: u64, alignment: u64) -> u64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    const OUT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
 
     fn fill_and_release(
         vk: &VulkanDevice,
@@ -1197,7 +1239,7 @@ mod tests {
             height: 1080,
         };
         let frames = 130u32;
-        let out_path = std::env::var("CLIPRS_TEST_OUT").unwrap_or("target/test.h264".into());
+        let out_path = std::env::var("CLIPRS_TEST_OUT").unwrap_or(format!("{OUT_DIR}/test.h264"));
         let mut out = std::fs::File::create(&out_path).unwrap();
 
         let format = vk::Format::R8G8B8A8_UNORM;
@@ -1232,7 +1274,7 @@ mod tests {
             samples.push(sample);
         }
         crate::muxer::write_mp4(
-            std::path::Path::new("target/test.mp4"),
+            std::path::Path::new(&format!("{OUT_DIR}/test.mp4")),
             &samples,
             extent.width,
             extent.height,
@@ -1278,7 +1320,7 @@ mod tests {
             .command_buffer_count(1);
         let cb = unsafe { vk.device.allocate_command_buffers(&cb_info).unwrap() }[0];
 
-        let mut out = std::fs::File::create(format!("target/test_{format:?}.h264")).unwrap();
+        let mut out = std::fs::File::create(format!("{OUT_DIR}/test_{format:?}.h264")).unwrap();
         let mut old = vk::ImageLayout::UNDEFINED;
         for _ in 0..3 {
             fill_and_release(&vk, cb, image, [1.0, 0.0, 0.0, 1.0], old);

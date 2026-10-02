@@ -208,39 +208,56 @@ fn create_logical_device(
     let encode_queue_family_index =
         find_family(vk::QueueFlags::VIDEO_ENCODE_KHR).ok_or("no video encode queue family")?;
 
-    let priority = [1.0];
-    let queue_info = [
-        vk::DeviceQueueCreateInfo::default()
+    let high_priority = high_priority_families(instance, pdev).contains(&queue_family_index);
+    let create = |prioritized: bool| {
+        let priority = [1.0];
+        let mut graphics_priority = vk::DeviceQueueGlobalPriorityCreateInfo::default()
+            .global_priority(vk::QueueGlobalPriority::HIGH);
+        let mut graphics_queue = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index)
-            .queue_priorities(&priority),
-        vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(encode_queue_family_index)
-            .queue_priorities(&priority),
-    ];
+            .queue_priorities(&priority);
+        if prioritized && high_priority {
+            graphics_queue = graphics_queue.push(&mut graphics_priority);
+        }
+        let queue_info = [
+            graphics_queue,
+            vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(encode_queue_family_index)
+                .queue_priorities(&priority),
+        ];
 
-    let extensions = [
-        ash::khr::external_memory_fd::NAME.as_ptr(),
-        ash::ext::external_memory_dma_buf::NAME.as_ptr(),
-        ash::ext::image_drm_format_modifier::NAME.as_ptr(),
-        ash::ext::queue_family_foreign::NAME.as_ptr(),
-        ash::khr::video_queue::NAME.as_ptr(),
-        ash::khr::video_encode_queue::NAME.as_ptr(),
-        ash::khr::video_encode_h264::NAME.as_ptr(),
-        vk::VALVE_VIDEO_ENCODE_RGB_CONVERSION_NAME.as_ptr(),
-    ];
+        let mut extensions = vec![
+            ash::khr::external_memory_fd::NAME.as_ptr(),
+            ash::ext::external_memory_dma_buf::NAME.as_ptr(),
+            ash::ext::image_drm_format_modifier::NAME.as_ptr(),
+            ash::ext::queue_family_foreign::NAME.as_ptr(),
+            ash::khr::video_queue::NAME.as_ptr(),
+            ash::khr::video_encode_queue::NAME.as_ptr(),
+            ash::khr::video_encode_h264::NAME.as_ptr(),
+            vk::VALVE_VIDEO_ENCODE_RGB_CONVERSION_NAME.as_ptr(),
+        ];
+        if prioritized && high_priority {
+            extensions.push(ash::khr::global_priority::NAME.as_ptr());
+        }
 
-    let mut features13 = vk::PhysicalDeviceVulkan13Features::default().synchronization2(true);
-    let mut rgb_features =
-        vk::PhysicalDeviceVideoEncodeRgbConversionFeaturesVALVE::default()
+        let mut features13 = vk::PhysicalDeviceVulkan13Features::default().synchronization2(true);
+        let mut rgb_features = vk::PhysicalDeviceVideoEncodeRgbConversionFeaturesVALVE::default()
             .video_encode_rgb_conversion(true);
 
-    let device_info = vk::DeviceCreateInfo::default()
-        .queue_create_infos(&queue_info)
-        .enabled_extension_names(&extensions)
-        .push(&mut features13)
-        .push(&mut rgb_features);
+        let device_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_info)
+            .enabled_extension_names(&extensions)
+            .push(&mut features13)
+            .push(&mut rgb_features);
 
-    let device = unsafe { instance.create_device(pdev, &device_info, None)? };
+        unsafe { instance.create_device(pdev, &device_info, None) }
+    };
+
+    // The kernel refuses above-normal GPU priority without CAP_SYS_NICE, so non-root runs use the default.
+    let device = match create(true) {
+        Err(vk::Result::ERROR_NOT_PERMITTED) => create(false),
+        result => result,
+    }?;
     let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
     let encode_queue = unsafe { device.get_device_queue(encode_queue_family_index, 0) };
 
@@ -249,4 +266,24 @@ fn create_logical_device(
         (queue, queue_family_index),
         (encode_queue, encode_queue_family_index),
     ))
+}
+
+fn high_priority_families(instance: &Instance, pdev: vk::PhysicalDevice) -> Vec<u32> {
+    let count = unsafe { instance.get_physical_device_queue_family_properties2_len(pdev) };
+    let mut priorities = vec![vk::QueueFamilyGlobalPriorityProperties::default(); count];
+    let mut families: Vec<_> = priorities
+        .iter_mut()
+        .map(|p| vk::QueueFamilyProperties2::default().push(p))
+        .collect();
+    unsafe { instance.get_physical_device_queue_family_properties2(pdev, &mut families) };
+    drop(families);
+
+    priorities
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            p.priorities[..p.priority_count as usize].contains(&vk::QueueGlobalPriority::HIGH)
+        })
+        .map(|(i, _)| i as u32)
+        .collect()
 }
