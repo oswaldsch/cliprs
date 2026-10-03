@@ -31,7 +31,9 @@ impl<'a> Capture<'a> {
         frame: &Frame,
         f: impl FnOnce(&[u8]) -> R,
     ) -> Result<R, Box<dyn Error>> {
-        let (image, memory) = self.vk.import_frame(frame, vk::ImageUsageFlags::TRANSFER_SRC, None)?;
+        let (image, memory) =
+            self.vk
+                .import_frame(frame, vk::ImageUsageFlags::TRANSFER_SRC, None)?;
         let result = self.reader.capture_blocking(image, f);
         unsafe {
             self.vk.device.destroy_image(image, None);
@@ -50,7 +52,11 @@ pub fn grab_frame(card: &Card) -> Result<Frame, Box<dyn Error>> {
         }
         seen.push(frame.fourcc.to_string());
     }
-    Err(format!("no primary plane with a supported format, found [{}]", seen.join(", ")).into())
+    Err(format!(
+        "no primary plane with a supported format, found [{}]",
+        seen.join(", ")
+    )
+    .into())
 }
 
 pub fn save_png(

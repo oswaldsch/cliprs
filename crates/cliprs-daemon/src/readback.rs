@@ -248,7 +248,10 @@ impl Drop for FrameReader<'_> {
     }
 }
 
-pub(crate) fn find_readback_memory(dev: &VulkanDevice, type_bits: u32) -> Result<(u32, bool), Box<dyn Error>> {
+pub(crate) fn find_readback_memory(
+    dev: &VulkanDevice,
+    type_bits: u32,
+) -> Result<(u32, bool), Box<dyn Error>> {
     let props = unsafe { dev.instance.get_physical_device_memory_properties(dev.pdev) };
     let find = |wanted: vk::MemoryPropertyFlags| {
         (0..props.memory_type_count).find(|&i| {

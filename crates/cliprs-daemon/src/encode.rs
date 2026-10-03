@@ -1,18 +1,16 @@
 use ash::khr;
 use ash::vk::{self, TaggedStructure, native};
+use cliprs_ipc::Settings;
 use std::error::Error;
 
 use crate::kms::Frame;
 use crate::readback::find_readback_memory;
 use crate::vulkan::{VulkanDevice, vk_format};
 
-const ENCODABLE_FORMATS: [vk::Format; 2] =
-    [vk::Format::R8G8B8A8_UNORM, vk::Format::B8G8R8A8_UNORM];
+const ENCODABLE_FORMATS: [vk::Format; 2] = [vk::Format::R8G8B8A8_UNORM, vk::Format::B8G8R8A8_UNORM];
 const DPB_FORMAT: vk::Format = vk::Format::G8_B8R8_2PLANE_420_UNORM;
 const DPB_SLOTS: usize = 2;
-const GOP_LENGTH: u32 = 120;
-const AVERAGE_BITRATE: u64 = 30_000_000;
-const PEAK_BITRATE: u64 = 60_000_000;
+pub const GOP_LENGTH: u32 = 120;
 const RATE_WINDOW_MS: u32 = 1000;
 const BITSTREAM_CAPACITY: u64 = 8 * 1024 * 1024;
 const NO_REFERENCE: u8 = 0xFF;
@@ -239,6 +237,8 @@ pub struct Encoder<'a> {
     video_encode_queue: khr::video_encode_queue::Device,
     extent: vk::Extent2D,
     fps: u32,
+    average_bitrate: u64,
+    peak_bitrate: u64,
     picture_format: vk::Format,
     staging: Option<Staging>,
     session: vk::VideoSessionKHR,
@@ -264,9 +264,10 @@ impl<'a> Encoder<'a> {
         vk: &'a VulkanDevice,
         width: u32,
         height: u32,
-        fps: u32,
+        settings: &Settings,
         source_format: vk::Format,
     ) -> Result<Self, Box<dyn Error>> {
+        let fps = settings.fps;
         let extent = vk::Extent2D { width, height };
         let picture_format = if ENCODABLE_FORMATS.contains(&source_format) {
             source_format
@@ -276,7 +277,7 @@ impl<'a> Encoder<'a> {
         let video_queue = khr::video_queue::Device::load(&vk.instance, &vk.device);
         let video_encode_queue = khr::video_encode_queue::Device::load(&vk.instance, &vk.device);
 
-        let caps = query_capabilities(vk, extent)?;
+        let caps = query_capabilities(vk, extent, settings.peak_bitrate_bps())?;
         let level = pick_level(width, height, fps, caps.max_level_idc);
 
         let (session, session_memory) = create_session(
@@ -302,6 +303,8 @@ impl<'a> Encoder<'a> {
             video_encode_queue,
             extent,
             fps,
+            average_bitrate: settings.average_bitrate_bps,
+            peak_bitrate: settings.peak_bitrate_bps(),
             picture_format,
             staging: None,
             session,
@@ -412,7 +415,7 @@ impl<'a> Encoder<'a> {
         let begin_info = vk::VideoBeginCodingInfoKHR::default()
             .video_session(self.session)
             .video_session_parameters(self.parameters);
-        let layers = rate_control_layers(self.fps);
+        let layers = rate_control_layers(self.fps, self.average_bitrate, self.peak_bitrate);
         let mut rate_control = rate_control(&layers);
         let mut h264_rate_control = h264_rate_control();
         let control_info = vk::VideoCodingControlInfoKHR::default()
@@ -508,8 +511,8 @@ impl<'a> Encoder<'a> {
         slice_header.disable_deblocking_filter_idc =
             native::StdVideoH264DisableDeblockingFilterIdc_STD_VIDEO_H264_DISABLE_DEBLOCKING_FILTER_IDC_DISABLED;
 
-        let slices = [vk::VideoEncodeH264NaluSliceInfoKHR::default()
-            .std_slice_header(&slice_header)];
+        let slices =
+            [vk::VideoEncodeH264NaluSliceInfoKHR::default().std_slice_header(&slice_header)];
         let mut h264_picture = vk::VideoEncodeH264PictureInfoKHR::default()
             .nalu_slice_entries(&slices)
             .std_picture_info(&picture);
@@ -576,7 +579,7 @@ impl<'a> Encoder<'a> {
             .reference_slots(&encode_ref_slots)
             .push(&mut h264_picture);
 
-        let layers = rate_control_layers(self.fps);
+        let layers = rate_control_layers(self.fps, self.average_bitrate, self.peak_bitrate);
         let mut rate_control = rate_control(&layers);
         let mut h264_rate_control = h264_rate_control();
         let begin_info = vk::VideoBeginCodingInfoKHR::default()
@@ -824,6 +827,21 @@ impl Drop for Encoder<'_> {
     }
 }
 
+pub fn query_max_bitrate(vk: &VulkanDevice) -> Result<u64, Box<dyn Error>> {
+    let video_queue = khr::video_queue::Instance::load(&vk.entry, &vk.instance);
+    with_encode_profile(|profile| {
+        let mut rgb = vk::VideoEncodeRgbConversionCapabilitiesVALVE::default();
+        let mut h264 = vk::VideoEncodeH264CapabilitiesKHR::default();
+        let mut encode = vk::VideoEncodeCapabilitiesKHR::default();
+        let mut caps = vk::VideoCapabilitiesKHR::default()
+            .push(&mut encode)
+            .push(&mut h264)
+            .push(&mut rgb);
+        unsafe { video_queue.get_physical_device_video_capabilities(vk.pdev, profile, &mut caps)? };
+        Ok(encode.max_bitrate)
+    })
+}
+
 struct Capabilities {
     max_level_idc: native::StdVideoH264LevelIdc,
     max_active_references: u32,
@@ -834,6 +852,7 @@ struct Capabilities {
 fn query_capabilities(
     vk: &VulkanDevice,
     extent: vk::Extent2D,
+    peak_bitrate: u64,
 ) -> Result<Capabilities, Box<dyn Error>> {
     let video_queue = khr::video_queue::Instance::load(&vk.entry, &vk.instance);
     with_encode_profile(|profile| {
@@ -873,9 +892,13 @@ fn query_capabilities(
         if !encode
             .rate_control_modes
             .contains(vk::VideoEncodeRateControlModeFlagsKHR::VBR)
-            || encode.max_bitrate < PEAK_BITRATE
+            || encode.max_bitrate < peak_bitrate
         {
-            return Err("encoder lacks VBR rate control at the configured bitrate".into());
+            return Err(format!(
+                "encoder lacks VBR rate control up to {peak_bitrate} bps (supports {})",
+                encode.max_bitrate
+            )
+            .into());
         }
 
         Ok(Capabilities {
@@ -1104,10 +1127,14 @@ fn find_device_local(vk: &VulkanDevice, type_bits: u32) -> Result<u32, Box<dyn E
         .ok_or("no device-local memory type".into())
 }
 
-fn rate_control_layers(fps: u32) -> [vk::VideoEncodeRateControlLayerInfoKHR<'static>; 1] {
+fn rate_control_layers(
+    fps: u32,
+    average_bitrate: u64,
+    peak_bitrate: u64,
+) -> [vk::VideoEncodeRateControlLayerInfoKHR<'static>; 1] {
     [vk::VideoEncodeRateControlLayerInfoKHR::default()
-        .average_bitrate(AVERAGE_BITRATE)
-        .max_bitrate(PEAK_BITRATE)
+        .average_bitrate(average_bitrate)
+        .max_bitrate(peak_bitrate)
         .frame_rate_numerator(fps)
         .frame_rate_denominator(1)]
 }

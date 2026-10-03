@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
+use cliprs_ipc::Settings;
+
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
 use crate::muxer::write_mp4;
@@ -9,7 +11,7 @@ use crate::vulkan::{VulkanDevice, vk_format};
 
 pub struct Recording<'a> {
     vk: &'a VulkanDevice,
-    fps: u32,
+    settings: Settings,
     width: Option<u32>,
     height: Option<u32>,
     encoder: Option<Encoder<'a>>,
@@ -21,13 +23,13 @@ pub struct Recording<'a> {
 impl<'a> Recording<'a> {
     pub fn new(
         vk: &'a VulkanDevice,
-        fps: u32,
-        max_frames: usize,
+        settings: Settings,
         path: impl AsRef<Path>,
     ) -> Result<Self, Box<dyn Error>> {
+        let max_frames = (settings.clip_seconds * settings.fps) as usize;
         Ok(Recording {
             vk,
-            fps,
+            settings,
             width: None,
             height: None,
             encoder: None,
@@ -51,7 +53,7 @@ impl<'a> Recording<'a> {
                 self.vk,
                 frame.width,
                 frame.height,
-                self.fps,
+                &self.settings,
                 format,
             )?);
         }
@@ -69,7 +71,7 @@ impl<'a> Recording<'a> {
     pub fn finish(self) -> Result<(), Box<dyn Error>> {
         let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
         let samples = Vec::from(self.samples);
-        write_mp4(&self.path, &samples, width, height, self.fps)
+        write_mp4(&self.path, &samples, width, height, self.settings.fps)
     }
 }
 

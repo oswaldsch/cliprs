@@ -1,8 +1,10 @@
 use std::fmt;
+use std::io;
 
-use iced::font::{Family, Weight};
-use iced::widget::{button, column, container, pick_list, row, text, text_input};
-use iced::{Element, Font, Length, Theme, padding};
+use cliprs_ipc::Settings;
+use iced::font::Weight;
+use iced::widget::{button, column, container, pick_list, row, text};
+use iced::{Element, Font, Length, Theme};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -44,12 +46,19 @@ impl BitrateOptions {
         BitrateOptions::High,
     ];
 
-    fn average_mbps(&self) -> f64 {
+    fn average_bps(&self) -> u64 {
         match self {
-            BitrateOptions::Low => 10.0,
-            BitrateOptions::Medium => 20.0,
-            BitrateOptions::High => 30.0,
+            BitrateOptions::Low => 10_000_000,
+            BitrateOptions::Medium => 20_000_000,
+            BitrateOptions::High => 30_000_000,
         }
+    }
+
+    fn from_bps(bps: u64) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|option| option.average_bps() == bps)
     }
 }
 
@@ -80,13 +89,20 @@ impl FPSOptions {
         FPSOptions::Fps144,
     ];
 
-    fn value(&self) -> f64 {
+    fn value(&self) -> u32 {
         match self {
-            FPSOptions::Fps30 => 30.0,
-            FPSOptions::Fps60 => 60.0,
-            FPSOptions::Fps120 => 120.0,
-            FPSOptions::Fps144 => 144.0,
+            FPSOptions::Fps30 => 30,
+            FPSOptions::Fps60 => 60,
+            FPSOptions::Fps120 => 120,
+            FPSOptions::Fps144 => 144,
         }
+    }
+
+    fn from_value(value: u32) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|option| option.value() == value)
     }
 }
 
@@ -118,13 +134,20 @@ impl DurationOptions {
         DurationOptions::Sec60,
     ];
 
-    fn seconds(&self) -> f64 {
+    fn seconds(&self) -> u32 {
         match self {
-            DurationOptions::Sec5 => 5.0,
-            DurationOptions::Sec15 => 15.0,
-            DurationOptions::Sec30 => 30.0,
-            DurationOptions::Sec60 => 60.0,
+            DurationOptions::Sec5 => 5,
+            DurationOptions::Sec15 => 15,
+            DurationOptions::Sec30 => 30,
+            DurationOptions::Sec60 => 60,
         }
+    }
+
+    fn from_seconds(seconds: u32) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|option| option.seconds() == seconds)
     }
 }
 
@@ -145,6 +168,31 @@ struct State {
     fps: Option<FPSOptions>,
     bitrate: Option<BitrateOptions>,
     duration: Option<DurationOptions>,
+}
+
+impl State {
+    fn load() -> State {
+        let settings = Settings::load().unwrap_or_default();
+        State {
+            fps: FPSOptions::from_value(settings.fps),
+            bitrate: BitrateOptions::from_bps(settings.average_bitrate_bps),
+            duration: DurationOptions::from_seconds(settings.clip_seconds),
+            ..State::default()
+        }
+    }
+
+    fn save(&self) -> io::Result<()> {
+        let (Some(fps), Some(bitrate), Some(duration)) = (self.fps, self.bitrate, self.duration)
+        else {
+            return Ok(());
+        };
+        Settings {
+            fps: fps.value(),
+            average_bitrate_bps: bitrate.average_bps(),
+            clip_seconds: duration.seconds(),
+        }
+        .save()
+    }
 }
 
 fn construct_heading(content: &str) -> Element<'_, Message> {
@@ -176,8 +224,8 @@ const PEAK_TO_AVERAGE: f64 = 2.0;
 
 fn estimate_ram_mb(state: &State) -> Option<(u64, u64)> {
     let (fps, bitrate, duration) = (state.fps?, state.bitrate?, state.duration?);
-    let buffered_seconds = duration.seconds() + GOP_FRAMES / fps.value();
-    let typical_mb = bitrate.average_mbps() / 8.0 * buffered_seconds;
+    let buffered_seconds = f64::from(duration.seconds()) + GOP_FRAMES / f64::from(fps.value());
+    let typical_mb = bitrate.average_bps() as f64 / 1_000_000.0 / 8.0 * buffered_seconds;
     Some((
         typical_mb.round() as u64,
         (typical_mb * PEAK_TO_AVERAGE).round() as u64,
@@ -230,25 +278,16 @@ fn view(state: &State) -> Element<'_, Message> {
 
 fn update(state: &mut State, message: Message) {
     match message {
-        Message::Navigate(page) => state.selected_sidebar_tab = page,
-        Message::FPSChanged(selected) => match selected {
-            FPSOptions::Fps30 => state.fps = Some(FPSOptions::Fps30),
-            FPSOptions::Fps60 => state.fps = Some(FPSOptions::Fps60),
-            FPSOptions::Fps120 => state.fps = Some(FPSOptions::Fps120),
-            FPSOptions::Fps144 => state.fps = Some(FPSOptions::Fps144),
-        },
-        Message::BitrateChanged(selected) => match selected {
-            BitrateOptions::Low => state.bitrate = Some(BitrateOptions::Low),
-            BitrateOptions::Medium => state.bitrate = Some(BitrateOptions::Medium),
-            BitrateOptions::High => state.bitrate = Some(BitrateOptions::High),
-        },
-        Message::DurationChanged(selected) => match selected {
-            DurationOptions::Sec5 => state.duration = Some(DurationOptions::Sec5),
-            DurationOptions::Sec15 => state.duration = Some(DurationOptions::Sec15),
-            DurationOptions::Sec30 => state.duration = Some(DurationOptions::Sec30),
-            DurationOptions::Sec60 => state.duration = Some(DurationOptions::Sec60),
-        },
+        Message::Navigate(page) => {
+            state.selected_sidebar_tab = page;
+            return;
+        }
+        Message::FPSChanged(selected) => state.fps = Some(selected),
+        Message::BitrateChanged(selected) => state.bitrate = Some(selected),
+        Message::DurationChanged(selected) => state.duration = Some(selected),
     }
+    // TODO: surface save errors in the UI, there is no logger in this crate yet
+    let _ = state.save();
 }
 
 fn theme(_state: &State) -> Theme {
@@ -256,7 +295,7 @@ fn theme(_state: &State) -> Theme {
 }
 
 fn main() -> iced::Result {
-    iced::application(State::default, update, view)
+    iced::application(State::load, update, view)
         .theme(theme)
         .run()
 }
