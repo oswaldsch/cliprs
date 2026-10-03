@@ -22,7 +22,7 @@ fn recording_loop(
     settings: Settings,
 ) -> Result<(), Box<dyn Error>> {
     let interval = Duration::from_secs_f64(1.0 / settings.fps as f64);
-    let mut recording = stitch::Recording::new(vk, settings, "clip.mp4")?;
+    let mut recording = stitch::Recording::new(vk, settings)?;
     let start = Instant::now();
     let record_hotkey = hotkeys::hotkey_presses(KeyCode::KEY_F8);
 
@@ -32,8 +32,8 @@ fn recording_loop(
         recording.add_frame(&frame)?;
         thread::sleep((start + interval * (i + 1)).saturating_duration_since(Instant::now()));
         if record_hotkey.try_recv().is_ok() {
-            println!("received keypress f8, stopping");
-            return recording.finish();
+            println!("received keypress f8, saving clip");
+            return recording.finish("clips", &uuid::Uuid::new_v4().to_string());
         }
         i += 1;
     }

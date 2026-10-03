@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use cliprs_ipc::Settings;
+use cliprs_ipc::{ClipMeta, Settings};
 
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
@@ -17,15 +19,10 @@ pub struct Recording<'a> {
     encoder: Option<Encoder<'a>>,
     samples: VecDeque<Sample>,
     max_frames: usize,
-    path: PathBuf,
 }
 
 impl<'a> Recording<'a> {
-    pub fn new(
-        vk: &'a VulkanDevice,
-        settings: Settings,
-        path: impl AsRef<Path>,
-    ) -> Result<Self, Box<dyn Error>> {
+    pub fn new(vk: &'a VulkanDevice, settings: Settings) -> Result<Self, Box<dyn Error>> {
         let max_frames = (settings.clip_seconds * settings.fps) as usize;
         Ok(Recording {
             vk,
@@ -35,7 +32,6 @@ impl<'a> Recording<'a> {
             encoder: None,
             samples: VecDeque::new(),
             max_frames,
-            path: path.as_ref().to_path_buf(),
         })
     }
 
@@ -68,10 +64,29 @@ impl<'a> Recording<'a> {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<(), Box<dyn Error>> {
+    pub fn finish(self, clips_dir: impl AsRef<Path>, id: &str) -> Result<(), Box<dyn Error>> {
         let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
         let samples = Vec::from(self.samples);
-        write_mp4(&self.path, &samples, width, height, self.settings.fps)
+        let clips_dir = clips_dir.as_ref();
+        fs::create_dir_all(clips_dir)?;
+
+        let clip_path = clips_dir.join(format!("{id}.mp4"));
+        let part_path = clips_dir.join(format!("{id}.mp4.part"));
+        write_mp4(&part_path, &samples, width, height, self.settings.fps)?;
+
+        ClipMeta {
+            title: None,
+            saved_at_unix_secs: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            duration_secs: samples.len() as f64 / f64::from(self.settings.fps),
+            fps: self.settings.fps,
+            width,
+            height,
+        }
+        .save(&clips_dir.join(format!("{id}.json")))?;
+
+        // Rename last so a visible .mp4 always has its sidecar.
+        fs::rename(part_path, clip_path)?;
+        Ok(())
     }
 }
 

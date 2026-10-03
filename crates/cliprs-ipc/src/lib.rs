@@ -58,6 +58,27 @@ impl Capabilities {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClipMeta {
+    #[serde(default)]
+    pub title: Option<String>,
+    pub saved_at_unix_secs: u64,
+    pub duration_secs: f64,
+    pub fps: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ClipMeta {
+    pub fn load(path: &Path) -> io::Result<Option<ClipMeta>> {
+        read_json(path)
+    }
+
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        write_json(path, self)
+    }
+}
+
 fn config_dir() -> io::Result<PathBuf> {
     let base = match env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
