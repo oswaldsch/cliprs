@@ -1,10 +1,12 @@
+mod style;
+
 use std::fmt;
 use std::io;
 
 use cliprs_ipc::Settings;
 use iced::font::Weight;
 use iced::widget::{button, column, container, pick_list, row, text};
-use iced::{Element, Font, Length, Theme};
+use iced::{Alignment, Element, Font, Length, Theme};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -17,16 +19,23 @@ enum Message {
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 enum SidebarTab {
     #[default]
-    Home,
+    Library,
     Settings,
 }
 
 impl SidebarTab {
-    const ALL: &[SidebarTab] = &[SidebarTab::Home, SidebarTab::Settings];
+    const ALL: &[SidebarTab] = &[SidebarTab::Library, SidebarTab::Settings];
     fn name(&self) -> &'static str {
         match self {
-            SidebarTab::Home => "Home",
+            SidebarTab::Library => "Library",
             SidebarTab::Settings => "Settings",
+        }
+    }
+
+    fn icon_bytes(&self) -> &'static [u8] {
+        match self {
+            SidebarTab::Library => include_bytes!("../assets/library.svg"),
+            SidebarTab::Settings => include_bytes!("../assets/settings.svg"),
         }
     }
 }
@@ -65,9 +74,9 @@ impl BitrateOptions {
 impl std::fmt::Display for BitrateOptions {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> fmt::Result {
         match &self {
-            BitrateOptions::Low => write!(formatter, "Low"),
-            BitrateOptions::Medium => write!(formatter, "Medium"),
-            BitrateOptions::High => write!(formatter, "High"),
+            BitrateOptions::Low => write!(formatter, "Low (10 Mbit/sec)"),
+            BitrateOptions::Medium => write!(formatter, "Medium (20 Mbit/sec)"),
+            BitrateOptions::High => write!(formatter, "High (30 Mbit/sec)"),
         }
     }
 }
@@ -195,26 +204,17 @@ impl State {
     }
 }
 
-fn construct_heading(content: &str) -> Element<'_, Message> {
-    text(content)
-        .size(24)
-        .font(Font {
-            weight: Weight::Bold,
-            ..Font::DEFAULT
-        })
-        .width(Length::Fill)
-        .center()
-        .into()
-}
-
 fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Message> {
-    button(tab.name())
+    let selected: bool = state.selected_sidebar_tab == tab;
+
+    button(row![style::icon(tab.icon_bytes(), selected), tab.name()].spacing(8))
         .width(Length::Fill)
         .on_press(Message::Navigate(tab))
-        .style(if state.selected_sidebar_tab == tab {
-            button::primary // TODO: remove rounded corners
+        .padding(style::BUTTON_PADDING)
+        .style(if selected {
+            style::sidebar_button_selected
         } else {
-            button::text
+            style::sidebar_button
         })
         .into()
 }
@@ -232,43 +232,108 @@ fn estimate_ram_mb(state: &State) -> Option<(u64, u64)> {
     ))
 }
 
+fn styled_pick_list<'a, T>(
+    options: &'a [T],
+    selected: Option<T>,
+    on_selected: impl Fn(T) -> Message + 'a,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+{
+    pick_list(options, selected, on_selected)
+        .style(style::dropdown)
+        .menu_style(style::dropdown_menu)
+        .width(style::CONTROL_WIDTH)
+        .padding(style::PICK_LIST_PADDING)
+        .into()
+}
+
+fn construct_ram_infobox<'a>(typical: u64, peak: u64) -> Element<'a, Message> {
+    let figures = column![
+        text(format!(
+            "Your configuration will use about {typical} MB RAM"
+        ))
+        .font(Font {
+            weight: Weight::Bold,
+            ..Font::DEFAULT
+        }),
+        text(format!("Up to {peak} MB in very busy scenes"))
+            .size(style::LABEL_SIZE)
+            .color(style::MUTED),
+    ]
+    .spacing(4);
+
+    container(
+        row![
+            style::accent_icon(include_bytes!("../assets/info.svg")),
+            figures
+        ]
+        .spacing(style::SECTION_SPACING)
+        .align_y(Alignment::Start),
+    )
+    .style(style::card)
+    .padding(14)
+    .width(Length::Fill)
+    .into()
+}
+
+fn construct_setting_row<'a>(
+    label: &'a str,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    row![text(label).width(Length::Fill), control]
+        .spacing(style::SECTION_SPACING)
+        .align_y(Alignment::Center)
+        .into()
+}
+
 fn construct_main_view(state: &State) -> Element<'_, Message> {
     match state.selected_sidebar_tab {
-        SidebarTab::Home => container(column![construct_heading("Welcome to cliprs")]),
+        SidebarTab::Library => container(column![style::heading("Library")]),
         SidebarTab::Settings => container(
             column![
-                construct_heading("Settings"),
-                text("Recording FPS"),
-                pick_list(FPSOptions::ALL, state.fps, Message::FPSChanged),
-                text("Average bitrate"),
-                pick_list(BitrateOptions::ALL, state.bitrate, Message::BitrateChanged),
-                text("Clip duration"),
-                pick_list(
-                    DurationOptions::ALL,
-                    state.duration,
-                    Message::DurationChanged
+                style::heading("Settings"),
+                construct_setting_row(
+                    "Recording FPS",
+                    styled_pick_list(FPSOptions::ALL, state.fps, Message::FPSChanged),
+                ),
+                construct_setting_row(
+                    "Average bitrate",
+                    styled_pick_list(BitrateOptions::ALL, state.bitrate, Message::BitrateChanged),
+                ),
+                construct_setting_row(
+                    "Clip duration",
+                    styled_pick_list(
+                        DurationOptions::ALL,
+                        state.duration,
+                        Message::DurationChanged
+                    ),
                 ),
             ]
-            .extend(estimate_ram_mb(state).map(|(typical, peak)| {
-                Element::from(text(format!(
-                    "With your current settings, the recorder will use ~{typical} MB RAM (up to {peak} MB in very busy scenes)."
-                )))
-            }))
-            .spacing(10),
+            .extend(
+                estimate_ram_mb(state).map(|(typical, peak)| construct_ram_infobox(typical, peak)),
+            )
+            .spacing(style::SECTION_SPACING)
+            .max_width(style::CONTENT_MAX_WIDTH),
         )
-        .padding(10),
+        .padding(style::PAGE_PADDING)
+        .center_x(Length::Fill),
     }
     .into()
 }
 
 fn view(state: &State) -> Element<'_, Message> {
-    let sidebar = container(column(
-        SidebarTab::ALL
-            .iter()
-            .map(|tab| construct_sidebar_button(*tab, state)),
-    ))
-    .style(container::dark)
-    .width(200)
+    let sidebar = container(
+        column(
+            SidebarTab::ALL
+                .iter()
+                .map(|tab| construct_sidebar_button(*tab, state)),
+        )
+        .spacing(style::SIDEBAR_SPACING),
+    )
+    .padding(style::SIDEBAR_PADDING)
+    .style(style::sidebar)
+    .width(style::SIDEBAR_WIDTH)
     .height(Length::Fill);
 
     let main_view = construct_main_view(state);
@@ -291,7 +356,7 @@ fn update(state: &mut State, message: Message) {
 }
 
 fn theme(_state: &State) -> Theme {
-    Theme::Dark
+    style::theme()
 }
 
 fn main() -> iced::Result {

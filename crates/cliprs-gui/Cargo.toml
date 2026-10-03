@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 cliprs-ipc = { path = "../cliprs-ipc" }
-iced = "0.14.0"
+iced = { version = "0.14.0", features = ["svg"] }

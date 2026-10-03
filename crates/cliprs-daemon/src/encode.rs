@@ -1270,7 +1270,14 @@ mod tests {
         let mut out = std::fs::File::create(&out_path).unwrap();
 
         let format = vk::Format::R8G8B8A8_UNORM;
-        let mut encoder = Encoder::new(&vk, extent.width, extent.height, 60, format).unwrap();
+        let mut encoder = Encoder::new(
+            &vk,
+            extent.width,
+            extent.height,
+            &Settings::default(),
+            format,
+        )
+        .unwrap();
         let (image, memory) = create_image(
             &vk,
             extent,
@@ -1323,7 +1330,14 @@ mod tests {
             height: 1080,
         };
         let direct = ENCODABLE_FORMATS.contains(&format);
-        let mut encoder = Encoder::new(&vk, extent.width, extent.height, 60, format).unwrap();
+        let mut encoder = Encoder::new(
+            &vk,
+            extent.width,
+            extent.height,
+            &Settings::default(),
+            format,
+        )
+        .unwrap();
         let (usage, for_encode) = if direct {
             (vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR, true)
         } else {
