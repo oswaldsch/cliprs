@@ -37,12 +37,11 @@ fn recording_loop(
         if record_hotkey.try_recv().is_ok() {
             println!("received keypress f8, saving clip");
             let id = uuid::Uuid::new_v4().to_string();
-            recording.finish(CLIPS_DIR, &id)?;
+            recording.save(CLIPS_DIR, &id)?;
             let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
             let mut capture = capture::Capture::new(vk, &frame)?;
             thumbnail::save_thumbnail(&mut capture, &frame, &thumbnail_path)?;
             ownership::give_to_invoking_user(thumbnail_path.as_ref())?;
-            return Ok(());
         }
         i += 1;
     }

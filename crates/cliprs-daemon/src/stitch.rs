@@ -65,13 +65,13 @@ impl<'a> Recording<'a> {
         Ok(())
     }
 
-    pub fn finish(self, clips_dir: impl AsRef<Path>, id: &str) -> Result<(), Box<dyn Error>> {
+    pub fn save(&mut self, clips_dir: impl AsRef<Path>, id: &str) -> Result<(), Box<dyn Error>> {
         let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
-        let samples = Vec::from(self.samples);
+
         let clips_dir = clips_dir.as_ref();
         fs::create_dir_all(clips_dir)?;
         give_to_invoking_user(clips_dir)?;
-
+        let samples = VecDeque::make_contiguous(&mut self.samples);
         let clip_path = clips_dir.join(format!("{id}.mp4"));
         let part_path = clips_dir.join(format!("{id}.mp4.part"));
         write_mp4(&part_path, &samples, width, height, self.settings.fps)?;
