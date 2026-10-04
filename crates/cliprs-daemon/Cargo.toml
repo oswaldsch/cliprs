@@ -12,4 +12,4 @@ drm-fourcc = "2.2.0"
 evdev = "0.13.2"
 image = "0.25.10"
 mp4 = "0.14.0"
-uuid = { version = "1.27.0", features = ["v4", "v7"] }
+uuid = { version = "1.27.0", features = ["v4"] }

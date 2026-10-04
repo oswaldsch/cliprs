@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 cliprs-ipc = { path = "../cliprs-ipc" }
-iced = { version = "0.14.0", features = ["svg"] }
+iced = { version = "0.14.0", features = ["svg", "image"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"

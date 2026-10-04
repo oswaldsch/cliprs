@@ -9,6 +9,7 @@ use cliprs_ipc::{ClipMeta, Settings};
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
 use crate::muxer::write_mp4;
+use crate::ownership::give_to_invoking_user;
 use crate::vulkan::{VulkanDevice, vk_format};
 
 pub struct Recording<'a> {
@@ -69,11 +70,14 @@ impl<'a> Recording<'a> {
         let samples = Vec::from(self.samples);
         let clips_dir = clips_dir.as_ref();
         fs::create_dir_all(clips_dir)?;
+        give_to_invoking_user(clips_dir)?;
 
         let clip_path = clips_dir.join(format!("{id}.mp4"));
         let part_path = clips_dir.join(format!("{id}.mp4.part"));
         write_mp4(&part_path, &samples, width, height, self.settings.fps)?;
+        give_to_invoking_user(&part_path)?;
 
+        let sidecar_path = clips_dir.join(format!("{id}.json"));
         ClipMeta {
             title: None,
             saved_at_unix_secs: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
@@ -82,7 +86,8 @@ impl<'a> Recording<'a> {
             width,
             height,
         }
-        .save(&clips_dir.join(format!("{id}.json")))?;
+        .save(&sidecar_path)?;
+        give_to_invoking_user(&sidecar_path)?;
 
         // Rename last so a visible .mp4 always has its sidecar.
         fs::rename(part_path, clip_path)?;

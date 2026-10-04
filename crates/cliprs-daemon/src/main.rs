@@ -3,8 +3,10 @@ mod encode;
 mod hotkeys;
 mod kms;
 mod muxer;
+mod ownership;
 mod readback;
 mod stitch;
+mod thumbnail;
 mod vulkan;
 
 use std::error::Error;
@@ -15,6 +17,7 @@ use cliprs_ipc::{Capabilities, Settings};
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
+const CLIPS_DIR: &str = "clips";
 
 fn recording_loop(
     card: &kms::Card,
@@ -33,7 +36,13 @@ fn recording_loop(
         thread::sleep((start + interval * (i + 1)).saturating_duration_since(Instant::now()));
         if record_hotkey.try_recv().is_ok() {
             println!("received keypress f8, saving clip");
-            return recording.finish("clips", &uuid::Uuid::new_v4().to_string());
+            let id = uuid::Uuid::new_v4().to_string();
+            recording.finish(CLIPS_DIR, &id)?;
+            let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
+            let mut capture = capture::Capture::new(vk, &frame)?;
+            thumbnail::save_thumbnail(&mut capture, &frame, &thumbnail_path)?;
+            ownership::give_to_invoking_user(thumbnail_path.as_ref())?;
+            return Ok(());
         }
         i += 1;
     }

@@ -1,10 +1,14 @@
 mod style;
 
 use std::fmt;
+use std::fs;
 use std::io;
 
+use chrono::{DateTime, Datelike, Local};
+use cliprs_ipc::ClipMeta;
 use cliprs_ipc::Settings;
 use iced::font::Weight;
+use iced::widget::grid;
 use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Element, Font, Length, Theme};
 
@@ -287,9 +291,90 @@ fn construct_setting_row<'a>(
         .into()
 }
 
+fn format_saved_at(unix_secs: u64) -> Option<String> {
+    let saved = DateTime::from_timestamp(i64::try_from(unix_secs).ok()?, 0)?.with_timezone(&Local);
+    let today = Local::now().date_naive();
+    let saved_day = saved.date_naive();
+
+    Some(if saved_day == today {
+        saved.format("%H:%M").to_string()
+    } else if today.pred_opt() == Some(saved_day) {
+        String::from("Yesterday")
+    } else if saved_day.year() == today.year() {
+        saved.format("%b %-d").to_string()
+    } else {
+        saved.format("%b %-d, %Y").to_string()
+    })
+}
+
+fn construct_clip_cards() -> Vec<Element<'static, Message>> {
+    let Ok(entries) = fs::read_dir("clips") else {
+        return Vec::new();
+    };
+
+    let mut cards: Vec<(u64, Element<'static, Message>)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "mp4") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+
+        let meta = ClipMeta::load(&path.with_extension("json")).ok().flatten();
+        let duration_secs = meta.as_ref().map(|meta| meta.duration_secs);
+        let size_mb = fs::metadata(&path).map(|file| file.len() as f64 / 1_000_000.0);
+        let details = meta.as_ref().map(|meta| {
+            let mut details = format!("{}x{} · {} fps", meta.width, meta.height, meta.fps);
+            if let Ok(size_mb) = size_mb {
+                details.push_str(&format!(" · {size_mb:.1} MB"));
+            }
+            details
+        });
+        let saved_at_unix_secs = meta.as_ref().map_or(0, |meta| meta.saved_at_unix_secs);
+        let saved_at = meta
+            .as_ref()
+            .and_then(|meta| format_saved_at(meta.saved_at_unix_secs));
+        let title = meta
+            .and_then(|meta| meta.title)
+            .unwrap_or_else(|| String::from("Unnamed Clip"));
+
+        let card = column![
+            style::clip_thumbnail(format!("clips/{id}.jpg"), duration_secs),
+            row![style::clip_title(title).width(Length::Fill)]
+                .extend(saved_at.map(|saved_at| Element::from(style::clip_details(saved_at))))
+                .spacing(style::CARD_TEXT_SPACING * 2.0)
+                .align_y(Alignment::Center),
+        ]
+        .extend(details.map(|details| Element::from(style::clip_details(details))))
+        .spacing(style::CARD_TEXT_SPACING)
+        .into();
+        cards.push((saved_at_unix_secs, card));
+    }
+
+    cards.sort_by_key(|(saved_at_unix_secs, _)| std::cmp::Reverse(*saved_at_unix_secs));
+    cards.into_iter().map(|(_, card)| card).collect()
+}
+
 fn construct_main_view(state: &State) -> Element<'_, Message> {
     match state.selected_sidebar_tab {
-        SidebarTab::Library => container(column![style::heading("Library")]),
+        SidebarTab::Library => {
+            let cards = construct_clip_cards();
+            let clips: Element<'_, Message> = if cards.is_empty() {
+                style::empty_state("No clips yet", "Come back here once you recorded a clip")
+            } else {
+                grid(cards).spacing(10).into()
+            };
+
+            container(
+                column![style::heading("Library"), clips]
+                    .spacing(style::SECTION_SPACING)
+                    .max_width(style::CONTENT_MAX_WIDTH),
+            )
+            .padding(style::PAGE_PADDING)
+            .center_x(Length::Fill)
+        }
         SidebarTab::Settings => container(
             column![
                 style::heading("Settings"),

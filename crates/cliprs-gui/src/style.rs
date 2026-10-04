@@ -1,8 +1,11 @@
 use iced::border::Radius;
-use iced::widget::svg::{self, Handle, Svg};
 use iced::font::Weight;
-use iced::widget::{Text, button, container, overlay::menu, pick_list, text};
-use iced::{Background, Border, Color, Font, Shadow, Theme, color};
+use iced::widget::image;
+use iced::widget::svg::{self, Handle, Svg};
+use iced::widget::{Text, button, column, container, overlay::menu, pick_list, stack, text};
+use iced::{
+    Alignment, Background, Border, Color, ContentFit, Element, Font, Length, Shadow, Theme, color,
+};
 
 pub const BG: Color = color!(0x0F1218);
 pub const SURFACE: Color = color!(0x161B24);
@@ -27,6 +30,15 @@ pub const PICK_LIST_PADDING: [f32; 2] = [8.0, 12.0];
 pub const HEADING_SIZE: f32 = 24.0;
 pub const LABEL_SIZE: f32 = 14.0;
 pub const ICON_SIZE: f32 = 20.0;
+pub const CARD_TEXT_SPACING: f32 = 4.0;
+const CLIP_TITLE_SIZE: f32 = 15.0;
+const CLIP_DETAILS_SIZE: f32 = 12.0;
+const EMPTY_TITLE_SIZE: f32 = 18.0;
+const EMPTY_STATE_PADDING: f32 = 48.0;
+const DURATION_SIZE: f32 = 12.0;
+const DURATION_PADDING: [f32; 2] = [2.0, 6.0];
+const DURATION_RADIUS: f32 = 4.0;
+const DURATION_MARGIN: f32 = 8.0;
 
 pub fn theme() -> Theme {
     Theme::custom(
@@ -126,7 +138,10 @@ pub fn dropdown_menu(_theme: &Theme) -> menu::Style {
         selected_text_color: Color::WHITE,
         selected_background: Background::Color(ACCENT),
         shadow: Shadow {
-            color: Color { a: 0.4, ..Color::BLACK },
+            color: Color {
+                a: 0.4,
+                ..Color::BLACK
+            },
             offset: iced::Vector::new(0.0, 4.0),
             blur_radius: 12.0,
         },
@@ -163,4 +178,80 @@ pub fn heading(content: &str) -> Text<'_> {
         weight: Weight::Bold,
         ..Font::DEFAULT
     })
+}
+
+pub fn thumbnail(path: impl Into<std::path::PathBuf>) -> image::Image {
+    image::Image::new(image::Handle::from_path(path))
+        .width(Length::Fill)
+        .content_fit(ContentFit::Contain)
+        .border_radius(RADIUS)
+}
+
+pub fn clip_title<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
+    text(content).size(CLIP_TITLE_SIZE).color(TEXT).font(Font {
+        weight: Weight::Semibold,
+        ..Font::DEFAULT
+    })
+}
+
+pub fn clip_details<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
+    text(content).size(CLIP_DETAILS_SIZE).color(MUTED)
+}
+
+pub fn empty_state<'a, M: 'a>(title: &'a str, hint: &'a str) -> Element<'a, M> {
+    container(
+        column![
+            text(title).size(EMPTY_TITLE_SIZE).color(TEXT).font(Font {
+                weight: Weight::Semibold,
+                ..Font::DEFAULT
+            }),
+            text(hint).size(LABEL_SIZE).color(MUTED),
+        ]
+        .spacing(CARD_TEXT_SPACING)
+        .align_x(Alignment::Center),
+    )
+    .center_x(Length::Fill)
+    .padding(EMPTY_STATE_PADDING)
+    .into()
+}
+
+pub fn clip_thumbnail<'a, M: 'a>(
+    path: impl Into<std::path::PathBuf>,
+    duration_secs: Option<f64>,
+) -> Element<'a, M> {
+    let image = thumbnail(path);
+    let Some(duration_secs) = duration_secs else {
+        return image.into();
+    };
+
+    let badge = container(text(format_duration(duration_secs)).size(DURATION_SIZE))
+        .padding(DURATION_PADDING)
+        .style(|_theme| container::Style {
+            text_color: Some(TEXT),
+            background: Some(Background::Color(Color {
+                a: 0.7,
+                ..Color::BLACK
+            })),
+            border: Border::default().rounded(DURATION_RADIUS),
+            ..container::Style::default()
+        });
+
+    stack![
+        image,
+        container(badge)
+            .align_right(Length::Fill)
+            .align_bottom(Length::Fill)
+            .padding(DURATION_MARGIN)
+    ]
+    .into()
+}
+
+fn format_duration(secs: f64) -> String {
+    let total = secs.round() as u64;
+    let (hours, minutes, seconds) = (total / 3600, total / 60 % 60, total % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
