@@ -35,7 +35,10 @@ enum Message {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // TODO: add logger
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,cliprs_overlay=info,cliprs_ipc=info"),
+    )
+    .init();
     let receiver = NotificationReceiver::bind()
         .map_err(|error| format!("could not bind overlay socket: {error}"))?;
     if !wayland::layer_shell_available() {

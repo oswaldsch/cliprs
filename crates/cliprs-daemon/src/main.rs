@@ -12,10 +12,27 @@ use std::error::Error;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cliprs_ipc::{CLIPS_DIR, Capabilities, Notification, Settings, give_to_invoking_user};
+use cliprs_ipc::{
+    CLIPS_DIR, Capabilities, Notification, Settings, give_to_invoking_user, notify, notify_error,
+};
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
+
+fn save_clip(
+    recording: &mut stitch::Recording,
+    vk: &vulkan::VulkanDevice,
+    frame: &kms::Frame,
+) -> Result<String, Box<dyn Error>> {
+    let id = uuid::Uuid::new_v4().to_string();
+    log::info!("attempting to save clip {id}");
+    recording.save(CLIPS_DIR, &id)?;
+    let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
+    let mut capture = capture::Capture::new(vk, frame)?;
+    thumbnail::save_thumbnail(&mut capture, frame, &thumbnail_path)?;
+    give_to_invoking_user(thumbnail_path.as_ref())?;
+    Ok(id)
+}
 
 fn recording_loop(
     card: &kms::Card,
@@ -33,25 +50,24 @@ fn recording_loop(
         recording.add_frame(&frame)?;
         thread::sleep((start + interval * (i + 1)).saturating_duration_since(Instant::now()));
         if record_hotkey.try_recv().is_ok() {
-            println!("received keypress f8, saving clip");
-            let id = uuid::Uuid::new_v4().to_string();
-            recording.save(CLIPS_DIR, &id)?;
-            let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
-            let mut capture = capture::Capture::new(vk, &frame)?;
-            thumbnail::save_thumbnail(&mut capture, &frame, &thumbnail_path)?;
-            give_to_invoking_user(thumbnail_path.as_ref())?;
-            if let Err(error) = cliprs_ipc::notify(&Notification::ClipSaved { id }) {
-                log::warn!("clip saved but overlay unreachable: {error}");
+            match save_clip(&mut recording, vk, &frame) {
+                Ok(id) => {
+                    if let Err(error) = notify(&Notification::ClipSaved { id }) {
+                        log::warn!("clip saved notification failed: {error}");
+                    }
+                }
+                Err(error) => {
+                    log::error!("clip save failed: {error}");
+                    notify_error(format!("Could not save clip: {error}"));
+                }
             }
         }
         i += 1;
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    let card = kms::Card::open("/dev/dri/card2")?;
+fn run() -> Result<(), Box<dyn Error>> {
+    let card = kms::Card::open("/dev/dri/card2")?; // TODO: add DRM enumeration
     let vk = vulkan::VulkanDevice::new()?;
 
     if SINGLE_FRAME_DEBUG {
@@ -73,4 +89,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings = Settings::load()?;
 
     recording_loop(&card, &vk, settings)
+}
+
+fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    if let Err(error) = run() {
+        log::error!("daemon stopped: {error}");
+        notify_error(format!("cliprs stopped: {error}"));
+        std::process::exit(1);
+    }
 }

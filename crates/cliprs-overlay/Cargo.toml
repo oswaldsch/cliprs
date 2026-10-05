@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cliprs-ipc = { version = "0.1.0", path = "../cliprs-ipc" }
+env_logger = "0.11.11"
 iced = { version = "0.14", features = ["svg"] }
 iced_layershell = "0.19.1"
 log = "0.4.34"

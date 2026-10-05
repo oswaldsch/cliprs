@@ -5,6 +5,7 @@ mod style;
 use std::path::PathBuf;
 use std::process::Command;
 
+use cliprs_ipc::notify_error;
 use iced::widget::{button, column, container, row};
 use iced::{Element, Length, Theme};
 
@@ -60,8 +61,10 @@ impl State {
     }
 
     fn save_settings(&self) {
-        // TODO: surface save errors in the UI, there is no logger in this crate yet
-        let _ = self.settings.save();
+        if let Err(error) = self.settings.save() {
+            log::error!("settings save failed: {error}");
+            notify_error(format!("Could not save settings: {error}"));
+        }
     }
 }
 
@@ -137,8 +140,14 @@ fn update(state: &mut State, message: Message) {
             state.save_settings();
         }
         Message::ClipClicked(video_path) => {
-            // TODO: surface spawn errors in the UI
-            let _ = Command::new("xdg-open").arg(video_path).spawn();
+            if let Err(error) = Command::new("xdg-open").arg(&video_path).spawn() {
+                log::error!(
+                    "failed to open clip at {} via xdg-open: {}",
+                    video_path.display(),
+                    error
+                );
+                notify_error(format!("Failed to open file: {error}"));
+            }
         }
     }
 }
@@ -148,6 +157,10 @@ fn theme(_state: &State) -> Theme {
 }
 
 fn main() -> iced::Result {
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,cliprs_gui=info,cliprs_ipc=info"),
+    )
+    .init();
     iced::application(State::load, update, view)
         .theme(theme)
         .run()
