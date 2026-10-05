@@ -12,7 +12,7 @@ use std::error::Error;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cliprs_ipc::{CLIPS_DIR, Capabilities, Settings, give_to_invoking_user};
+use cliprs_ipc::{CLIPS_DIR, Capabilities, Notification, Settings, give_to_invoking_user};
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
@@ -40,12 +40,17 @@ fn recording_loop(
             let mut capture = capture::Capture::new(vk, &frame)?;
             thumbnail::save_thumbnail(&mut capture, &frame, &thumbnail_path)?;
             give_to_invoking_user(thumbnail_path.as_ref())?;
+            if let Err(error) = cliprs_ipc::notify(&Notification::ClipSaved { id }) {
+                log::warn!("clip saved but overlay unreachable: {error}");
+            }
         }
         i += 1;
     }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let card = kms::Card::open("/dev/dri/card2")?;
     let vk = vulkan::VulkanDevice::new()?;
 

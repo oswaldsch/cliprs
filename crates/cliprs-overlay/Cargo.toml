@@ -1,0 +1,12 @@
+[package]
+name = "cliprs-overlay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cliprs-ipc = { version = "0.1.0", path = "../cliprs-ipc" }
+iced = { version = "0.14", features = ["svg"] }
+iced_layershell = "0.19.1"
+log = "0.4.34"
+notify-rust = "4.18.1"
+wayland-client = "0.31"

@@ -5,6 +5,7 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::chown;
+use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -16,6 +17,8 @@ pub const CLIPS_DIR: &str = "clips";
 const APP_DIR: &str = "cliprs";
 const SETTINGS_FILE: &str = "settings.json";
 const CAPABILITIES_FILE: &str = "capabilities.json";
+const OVERLAY_SOCKET_FILE: &str = "cliprs-overlay.sock";
+const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
 const PEAK_TO_AVERAGE_BITRATE: u64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,6 +89,60 @@ impl ClipMeta {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Notification {
+    ClipSaved { id: String },
+    Error { description: String },
+}
+
+pub fn notify(notification: &Notification) -> io::Result<()> {
+    send_notification(notification, &overlay_socket_path()?)
+}
+
+pub fn notify_error(description: impl Into<String>) {
+    let notification = Notification::Error {
+        description: description.into(),
+    };
+    if let Err(error) = notify(&notification) {
+        log::warn!("overlay unreachable: {error}, dropped {notification:?}");
+    }
+}
+
+fn send_notification(notification: &Notification, socket_path: &Path) -> io::Result<()> {
+    let socket = UnixDatagram::unbound()?;
+    // The daemon sends from its capture loop, which must not stall on a full overlay queue.
+    socket.set_nonblocking(true)?;
+    socket.send_to(&serde_json::to_vec(notification)?, socket_path)?;
+    Ok(())
+}
+
+pub struct NotificationReceiver {
+    socket: UnixDatagram,
+}
+
+impl NotificationReceiver {
+    pub fn bind() -> io::Result<Self> {
+        Self::bind_at(&overlay_socket_path()?)
+    }
+
+    fn bind_at(socket_path: &Path) -> io::Result<Self> {
+        // A socket file left behind by a previous overlay makes bind fail with AddrInUse.
+        match fs::remove_file(socket_path) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        Ok(NotificationReceiver {
+            socket: UnixDatagram::bind(socket_path)?,
+        })
+    }
+
+    pub fn receive(&self) -> io::Result<Notification> {
+        let mut buffer = vec![0; MAX_NOTIFICATION_BYTES];
+        let length = self.socket.recv(&mut buffer)?;
+        Ok(serde_json::from_slice(&buffer[..length])?)
+    }
+}
+
 // The daemon runs as root for DRM and evdev access, so files it creates would otherwise be root-owned.
 pub fn give_to_invoking_user(path: &Path) -> io::Result<()> {
     let (Some(uid), Some(gid)) = (sudo_id("SUDO_UID"), sudo_id("SUDO_GID")) else {
@@ -145,6 +202,21 @@ fn capabilities_path() -> io::Result<PathBuf> {
     Ok(config_dir()?.join(CAPABILITIES_FILE))
 }
 
+fn runtime_dir() -> io::Result<PathBuf> {
+    // sudo drops XDG_RUNTIME_DIR, and the overlay binds in the invoking user's runtime dir.
+    if let Some(uid) = sudo_id("SUDO_UID") {
+        return Ok(PathBuf::from(format!("/run/user/{uid}")));
+    }
+    match env::var_os("XDG_RUNTIME_DIR") {
+        Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
+        _ => Err(io::Error::other("XDG_RUNTIME_DIR is not set")),
+    }
+}
+
+fn overlay_socket_path() -> io::Result<PathBuf> {
+    Ok(runtime_dir()?.join(OVERLAY_SOCKET_FILE))
+}
+
 fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -184,6 +256,24 @@ mod tests {
         };
         write_json(&path, &settings).unwrap();
         assert_eq!(read_json::<Settings>(&path).unwrap(), Some(settings));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn notification_roundtrip_and_stale_socket() {
+        let dir = env::temp_dir().join(format!("cliprs-ipc-socket-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join(OVERLAY_SOCKET_FILE);
+        let error = Notification::Error {
+            description: "encode failed".to_string(),
+        };
+        assert!(send_notification(&error, &socket_path).is_err());
+
+        drop(NotificationReceiver::bind_at(&socket_path).unwrap());
+        let receiver = NotificationReceiver::bind_at(&socket_path).unwrap();
+        send_notification(&error, &socket_path).unwrap();
+        assert_eq!(receiver.receive().unwrap(), error);
 
         fs::remove_dir_all(&dir).unwrap();
     }
