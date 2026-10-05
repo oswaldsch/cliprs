@@ -5,6 +5,7 @@ use cliprs_ipc::{Capabilities, Settings};
 use iced::widget::{column, container, pick_list, row, text};
 use iced::{Alignment, Element, Length};
 
+use crate::style::text_field;
 use crate::{Message, style};
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]

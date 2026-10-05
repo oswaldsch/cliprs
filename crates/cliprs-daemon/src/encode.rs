@@ -1307,8 +1307,8 @@ mod tests {
             out.write_all(&sample.data).unwrap();
             samples.push(sample);
         }
-        crate::muxer::write_mp4(
-            std::path::Path::new(&format!("{OUT_DIR}/test.mp4")),
+        crate::muxer::write_mkv(
+            std::path::Path::new(&format!("{OUT_DIR}/test.mkv")),
             &samples,
             extent.width,
             extent.height,

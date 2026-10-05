@@ -8,7 +8,7 @@ use cliprs_ipc::{ClipMeta, Settings, give_to_invoking_user};
 
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
-use crate::muxer::write_mp4;
+use crate::muxer::write_mkv;
 use crate::vulkan::{VulkanDevice, vk_format};
 
 pub struct Recording<'a> {
@@ -71,9 +71,9 @@ impl<'a> Recording<'a> {
         fs::create_dir_all(clips_dir)?;
         give_to_invoking_user(clips_dir)?;
         let samples = VecDeque::make_contiguous(&mut self.samples);
-        let clip_path = clips_dir.join(format!("{id}.mp4"));
-        let part_path = clips_dir.join(format!("{id}.mp4.part"));
-        write_mp4(&part_path, &samples, width, height, self.settings.fps)?;
+        let clip_path = clips_dir.join(format!("{id}.mkv"));
+        let part_path = clips_dir.join(format!("{id}.mkv.part"));
+        write_mkv(&part_path, &samples, width, height, self.settings.fps)?;
         give_to_invoking_user(&part_path)?;
 
         let sidecar_path = clips_dir.join(format!("{id}.json"));
@@ -87,7 +87,7 @@ impl<'a> Recording<'a> {
         }
         .save(&sidecar_path)?;
 
-        // Rename last so a visible .mp4 always has its sidecar.
+        // Rename last so a visible .mkv always has its sidecar.
         fs::rename(part_path, clip_path)?;
         Ok(())
     }

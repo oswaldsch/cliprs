@@ -556,12 +556,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
 name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,7 +696,6 @@ name = "cliprs-daemon"
 version = "0.1.0"
 dependencies = [
  "ash 0.38.0+1.4.352",
- "bytes",
  "cliprs-ipc",
  "drm",
  "drm-fourcc",
@@ -710,8 +703,8 @@ dependencies = [
  "evdev",
  "image",
  "log",
- "mp4",
  "uuid",
+ "webm-iterable",
 ]
 
 [[package]]
@@ -1124,6 +1117,36 @@ name = "dtor"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
+
+[[package]]
+name = "ebml-iterable"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "152f8f4a13024011b26457b8b21040d9a9eb1222e693993ef037db391cd0c004"
+dependencies = [
+ "bytes",
+ "ebml-iterable-specification",
+ "ebml-iterable-specification-derive",
+ "futures",
+]
+
+[[package]]
+name = "ebml-iterable-specification"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f56467af159a98735d44231f53eaa505e919e6003266f103b99649a93f106784"
+
+[[package]]
+name = "ebml-iterable-specification-derive"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b066b81018300fdce40f71c4db355a102699324af96fad28f25ab1b5f87de066"
+dependencies = [
+ "ebml-iterable-specification",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "either"
@@ -2560,20 +2583,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mp4"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
-dependencies = [
- "byteorder",
- "bytes",
- "num-rational",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "mundy"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2772,7 +2781,6 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -4231,6 +4239,17 @@ dependencies = [
 
 [[package]]
 name = "syn"
+version = "1.0.109"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
@@ -4888,6 +4907,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webm-iterable"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b1f0c637f1c2b46d58a1b42b150135f8a31b024bfdcd56cc82febfbb20ba4c0"
+dependencies = [
+ "ebml-iterable",
 ]
 
 [[package]]

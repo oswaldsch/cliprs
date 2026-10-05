@@ -25,7 +25,7 @@ pub fn load_clips() -> Vec<Clip> {
     let mut clips: Vec<Clip> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "mp4"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "mkv" || ext == "mp4"))
         .map(load_clip)
         .collect();
     clips.sort_by_key(|clip| Reverse(clip.saved_at_unix_secs));

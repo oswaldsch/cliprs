@@ -1,7 +1,9 @@
 use iced::border::Radius;
 use iced::font::Weight;
 use iced::widget::svg::{self, Handle, Svg};
-use iced::widget::{Text, button, container, overlay::menu, pick_list, text};
+use iced::widget::{
+    Text, TextInput, button, container, overlay::menu, pick_list, text, text_input,
+};
 use iced::{Background, Border, Color, Font, Shadow, Theme, color};
 
 pub const BG: Color = color!(0x0F1218);
@@ -24,6 +26,8 @@ pub const CONTROL_WIDTH: f32 = 260.0;
 pub const CONTENT_MAX_WIDTH: f32 = 640.0;
 pub const BUTTON_PADDING: [f32; 2] = [10.0, 14.0];
 pub const PICK_LIST_PADDING: [f32; 2] = [8.0, 12.0];
+const TEXT_FIELD_PADDING: [f32; 2] = [8.0, 12.0];
+const SELECTION_ALPHA: f32 = 0.4;
 pub const HEADING_SIZE: f32 = 24.0;
 pub const LABEL_SIZE: f32 = 14.0;
 pub const ICON_SIZE: f32 = 20.0;
@@ -152,6 +156,36 @@ pub fn dropdown_menu(_theme: &Theme) -> menu::Style {
             blur_radius: 12.0,
         },
     }
+}
+
+fn text_field_style(_theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let (background, border_color, value) = match status {
+        text_input::Status::Active => (RAISED, OUTLINE, TEXT),
+        text_input::Status::Hovered => (RAISED, MUTED, TEXT),
+        text_input::Status::Focused { .. } => (RAISED, ACCENT, TEXT),
+        text_input::Status::Disabled => (SURFACE, OUTLINE, MUTED),
+    };
+    text_input::Style {
+        background: Background::Color(background),
+        border: rounded(border_color, 1.0),
+        icon: MUTED,
+        placeholder: MUTED,
+        value,
+        selection: Color {
+            a: SELECTION_ALPHA,
+            ..ACCENT
+        },
+    }
+}
+
+pub fn text_field<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &str,
+) -> TextInput<'a, Message> {
+    text_input(placeholder, value)
+        .style(text_field_style)
+        .width(CONTROL_WIDTH)
+        .padding(TEXT_FIELD_PADDING)
 }
 
 fn icon(bytes: &'static [u8]) -> Svg<'static> {

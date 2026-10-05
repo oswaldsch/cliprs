@@ -1,21 +1,31 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 
-use bytes::Bytes;
-use mp4::{
-    AvcConfig, FourCC, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType,
-};
+use webm_iterable::matroska_spec::{Master, MatroskaSpec, SimpleBlock};
+use webm_iterable::{WebmWriter, WriteOptions};
 
 use crate::encode::Sample;
 
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;
-const TRACK_ID: u32 = 1;
-const BRANDS: [&str; 4] = ["isom", "iso2", "avc1", "mp41"];
+const TRACK_NUMBER: u64 = 1;
+const TRACK_TYPE_VIDEO: u64 = 1;
+const CODEC_ID: &str = "V_MPEG4/ISO/AVC";
+const APP_NAME: &str = "cliprs";
+const NANOS_PER_MILLI: u64 = 1_000_000;
+const NANOS_PER_SEC: u64 = 1_000_000_000;
+const CUES_ID: [u8; 4] = [0x1C, 0x53, 0xBB, 0x6B];
+const SEEK_POSITION_ID: u64 = 0x53AC;
+// The writer holds the segment header (4-byte ID, 8-byte unknown size) back until the next element.
+const SEGMENT_HEADER_LEN: u64 = 12;
+const AVCC_VERSION: u8 = 1;
+const AVCC_NAL_LENGTH_4_BYTES: u8 = 0xFF;
+const AVCC_ONE_SPS: u8 = 0xE1;
+const AVCC_ONE_PPS: u8 = 1;
 
-pub fn write_mp4(
+pub fn write_mkv(
     path: &Path,
     samples: &[Sample],
     width: u32,
@@ -27,45 +37,118 @@ pub fn write_mp4(
     let sps = find_nal(&first_nals, NAL_SPS).ok_or("first sample has no SPS")?;
     let pps = find_nal(&first_nals, NAL_PPS).ok_or("first sample has no PPS")?;
 
-    let config = Mp4Config {
-        major_brand: "isom".parse::<FourCC>()?,
-        minor_version: 512,
-        compatible_brands: BRANDS
-            .iter()
-            .map(|b| b.parse::<FourCC>())
-            .collect::<Result<_, _>>()?,
-        timescale: 1000,
-    };
-    let mut writer = Mp4Writer::write_start(BufWriter::new(File::create(path)?), &config)?;
+    let fps = u64::from(fps);
+    let timestamp_ms = |frame: usize| frame as u64 * 1000 / fps;
 
-    writer.add_track(&TrackConfig {
-        track_type: TrackType::Video,
-        timescale: fps,
-        language: "und".to_string(),
-        media_conf: MediaConfig::AvcConfig(AvcConfig {
-            width: width as u16,
-            height: height as u16,
-            seq_param_set: sps.to_vec(),
-            pic_param_set: pps.to_vec(),
-        }),
-    })?;
+    let mut writer = WebmWriter::new(File::create(path)?);
+    writer.write(&MatroskaSpec::Ebml(Master::Full(vec![
+        MatroskaSpec::EbmlVersion(1),
+        MatroskaSpec::EbmlReadVersion(1),
+        MatroskaSpec::EbmlMaxIdLength(4),
+        MatroskaSpec::EbmlMaxSizeLength(8),
+        MatroskaSpec::DocType("matroska".to_string()),
+        MatroskaSpec::DocTypeVersion(4),
+        MatroskaSpec::DocTypeReadVersion(2),
+    ])))?;
 
-    for (i, sample) in samples.iter().enumerate() {
-        writer.write_sample(
-            TRACK_ID,
-            &Mp4Sample {
-                start_time: i as u64,
-                duration: 1,
-                rendering_offset: 0,
-                is_sync: sample.is_idr,
-                bytes: Bytes::from(to_avcc(&sample.data)),
-            },
-        )?;
+    // An unknown-size segment makes the writer flush each cluster instead of buffering the file.
+    writer.write_advanced(
+        &MatroskaSpec::Segment(Master::Start),
+        WriteOptions::is_unknown_sized_element(),
+    )?;
+    let segment_start = writer.get_mut().stream_position()? + SEGMENT_HEADER_LEN;
+    write_seek_head(&mut writer, 0)?;
+
+    writer.write(&MatroskaSpec::Info(Master::Full(vec![
+        MatroskaSpec::TimestampScale(NANOS_PER_MILLI),
+        MatroskaSpec::Duration(samples.len() as f64 * 1000.0 / fps as f64),
+        MatroskaSpec::MuxingApp(APP_NAME.to_string()),
+        MatroskaSpec::WritingApp(APP_NAME.to_string()),
+    ])))?;
+
+    writer.write(&MatroskaSpec::Tracks(Master::Full(vec![
+        MatroskaSpec::TrackEntry(Master::Full(vec![
+            MatroskaSpec::TrackNumber(TRACK_NUMBER),
+            MatroskaSpec::TrackUID(TRACK_NUMBER),
+            MatroskaSpec::TrackType(TRACK_TYPE_VIDEO),
+            MatroskaSpec::FlagLacing(0),
+            MatroskaSpec::CodecID(CODEC_ID.to_string()),
+            MatroskaSpec::CodecPrivate(avc_decoder_config(sps, pps)?),
+            MatroskaSpec::DefaultDuration(NANOS_PER_SEC / fps),
+            MatroskaSpec::Video(Master::Full(vec![
+                MatroskaSpec::PixelWidth(u64::from(width)),
+                MatroskaSpec::PixelHeight(u64::from(height)),
+            ])),
+        ])),
+    ])))?;
+
+    let mut cue_points = Vec::new();
+    let mut frame = 0;
+    for gop in samples.chunk_by(|_, next| !next.is_idr) {
+        let cluster_ms = timestamp_ms(frame);
+        let cluster_position = writer.get_mut().stream_position()? - segment_start;
+        cue_points.push(MatroskaSpec::CuePoint(Master::Full(vec![
+            MatroskaSpec::CueTime(cluster_ms),
+            MatroskaSpec::CueTrackPositions(Master::Full(vec![
+                MatroskaSpec::CueTrack(TRACK_NUMBER),
+                MatroskaSpec::CueClusterPosition(cluster_position),
+            ])),
+        ])));
+
+        writer.write(&MatroskaSpec::Cluster(Master::Start))?;
+        writer.write(&MatroskaSpec::Timestamp(cluster_ms))?;
+        for sample in gop {
+            let data = to_avcc(&sample.data);
+            let block = SimpleBlock::new_uncheked(
+                &data,
+                TRACK_NUMBER,
+                i16::try_from(timestamp_ms(frame) - cluster_ms)?,
+                false,
+                None,
+                false,
+                sample.is_idr,
+            );
+            writer.write(&MatroskaSpec::from(block))?;
+            frame += 1;
+        }
+        writer.write(&MatroskaSpec::Cluster(Master::End))?;
     }
 
-    writer.write_end()?;
-    writer.into_writer().flush()?;
+    let cues_position = writer.get_mut().stream_position()? - segment_start;
+    writer.write(&MatroskaSpec::Cues(Master::Full(cue_points)))?;
+
+    writer.get_mut().seek(SeekFrom::Start(segment_start))?;
+    write_seek_head(&mut writer, cues_position)?;
+    writer.into_inner()?;
     Ok(())
+}
+
+// SeekPosition is written raw at a fixed 8 bytes so the placeholder can be overwritten in place.
+fn write_seek_head(
+    writer: &mut WebmWriter<File>,
+    cues_position: u64,
+) -> Result<(), Box<dyn Error>> {
+    writer.write(&MatroskaSpec::SeekHead(Master::Start))?;
+    writer.write(&MatroskaSpec::Seek(Master::Start))?;
+    writer.write(&MatroskaSpec::SeekID(CUES_ID.to_vec()))?;
+    writer.write_raw(SEEK_POSITION_ID, &cues_position.to_be_bytes())?;
+    writer.write(&MatroskaSpec::Seek(Master::End))?;
+    writer.write(&MatroskaSpec::SeekHead(Master::End))?;
+    Ok(())
+}
+
+fn avc_decoder_config(sps: &[u8], pps: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let profile_and_level = sps.get(1..4).ok_or("SPS is too short")?;
+
+    let mut config = vec![AVCC_VERSION];
+    config.extend_from_slice(profile_and_level);
+    config.extend_from_slice(&[AVCC_NAL_LENGTH_4_BYTES, AVCC_ONE_SPS]);
+    config.extend_from_slice(&u16::try_from(sps.len())?.to_be_bytes());
+    config.extend_from_slice(sps);
+    config.push(AVCC_ONE_PPS);
+    config.extend_from_slice(&u16::try_from(pps.len())?.to_be_bytes());
+    config.extend_from_slice(pps);
+    Ok(config)
 }
 
 fn split_nal_units(data: &[u8]) -> Vec<&[u8]> {
