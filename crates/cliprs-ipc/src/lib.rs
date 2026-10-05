@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+pub const CLIPS_DIR: &str = "clips";
+
 const APP_DIR: &str = "cliprs";
 const SETTINGS_FILE: &str = "settings.json";
 const CAPABILITIES_FILE: &str = "capabilities.json";

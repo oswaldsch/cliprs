@@ -1,19 +1,15 @@
+mod library;
+mod settings;
 mod style;
 
-use std::fmt;
-use std::fs;
-use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
-use chrono::{DateTime, Datelike, Local};
-use cliprs_ipc::ClipMeta;
-use cliprs_ipc::Settings;
-use iced::font::Weight;
-use iced::widget::grid;
-use iced::widget::mouse_area;
-use iced::widget::{button, column, container, pick_list, row, text};
-use iced::{Alignment, Element, Font, Length, Theme};
+use iced::widget::{button, column, container, row};
+use iced::{Element, Length, Theme};
+
+use library::Clip;
+use settings::{BitrateOptions, DurationOptions, FPSOptions};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -48,174 +44,31 @@ impl SidebarTab {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-enum BitrateOptions {
-    Low,
-    Medium,
-    #[default]
-    High,
-}
-
-impl BitrateOptions {
-    const ALL: &[BitrateOptions] = &[
-        BitrateOptions::Low,
-        BitrateOptions::Medium,
-        BitrateOptions::High,
-    ];
-
-    fn average_bps(&self) -> u64 {
-        match self {
-            BitrateOptions::Low => 10_000_000,
-            BitrateOptions::Medium => 20_000_000,
-            BitrateOptions::High => 30_000_000,
-        }
-    }
-
-    fn from_bps(bps: u64) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|option| option.average_bps() == bps)
-    }
-}
-
-impl std::fmt::Display for BitrateOptions {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> fmt::Result {
-        match &self {
-            BitrateOptions::Low => write!(formatter, "Low (10 Mbit/sec)"),
-            BitrateOptions::Medium => write!(formatter, "Medium (20 Mbit/sec)"),
-            BitrateOptions::High => write!(formatter, "High (30 Mbit/sec)"),
-        }
-    }
-}
-
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-enum FPSOptions {
-    Fps30,
-    #[default]
-    Fps60,
-    Fps120,
-    Fps144,
-}
-
-impl FPSOptions {
-    const ALL: &[FPSOptions] = &[
-        FPSOptions::Fps30,
-        FPSOptions::Fps60,
-        FPSOptions::Fps120,
-        FPSOptions::Fps144,
-    ];
-
-    fn value(&self) -> u32 {
-        match self {
-            FPSOptions::Fps30 => 30,
-            FPSOptions::Fps60 => 60,
-            FPSOptions::Fps120 => 120,
-            FPSOptions::Fps144 => 144,
-        }
-    }
-
-    fn from_value(value: u32) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|option| option.value() == value)
-    }
-}
-
-impl std::fmt::Display for FPSOptions {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> fmt::Result {
-        match &self {
-            FPSOptions::Fps30 => write!(formatter, "30 FPS"),
-            FPSOptions::Fps60 => write!(formatter, "60 FPS"),
-            FPSOptions::Fps120 => write!(formatter, "120 FPS"),
-            FPSOptions::Fps144 => write!(formatter, "144 FPS"),
-        }
-    }
-}
-
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-enum DurationOptions {
-    Sec5,
-    Sec15,
-    #[default]
-    Sec30,
-    Sec60,
-}
-
-impl DurationOptions {
-    const ALL: &[DurationOptions] = &[
-        DurationOptions::Sec5,
-        DurationOptions::Sec15,
-        DurationOptions::Sec30,
-        DurationOptions::Sec60,
-    ];
-
-    fn seconds(&self) -> u32 {
-        match self {
-            DurationOptions::Sec5 => 5,
-            DurationOptions::Sec15 => 15,
-            DurationOptions::Sec30 => 30,
-            DurationOptions::Sec60 => 60,
-        }
-    }
-
-    fn from_seconds(seconds: u32) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|option| option.seconds() == seconds)
-    }
-}
-
-impl std::fmt::Display for DurationOptions {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> fmt::Result {
-        match &self {
-            DurationOptions::Sec5 => write!(formatter, "5 Seconds"),
-            DurationOptions::Sec15 => write!(formatter, "15 Seconds"),
-            DurationOptions::Sec30 => write!(formatter, "30 Seconds"),
-            DurationOptions::Sec60 => write!(formatter, "60 Seconds"),
-        }
-    }
-}
-
-#[derive(Default)]
 struct State {
     selected_sidebar_tab: SidebarTab,
-    fps: Option<FPSOptions>,
-    bitrate: Option<BitrateOptions>,
-    duration: Option<DurationOptions>,
+    settings: settings::Form,
+    clips: Vec<Clip>,
 }
 
 impl State {
     fn load() -> State {
-        let settings = Settings::load().unwrap_or_default();
         State {
-            fps: FPSOptions::from_value(settings.fps),
-            bitrate: BitrateOptions::from_bps(settings.average_bitrate_bps),
-            duration: DurationOptions::from_seconds(settings.clip_seconds),
-            ..State::default()
+            selected_sidebar_tab: SidebarTab::default(),
+            settings: settings::Form::load(),
+            clips: library::load_clips(),
         }
     }
 
-    fn save(&self) -> io::Result<()> {
-        let (Some(fps), Some(bitrate), Some(duration)) = (self.fps, self.bitrate, self.duration)
-        else {
-            return Ok(());
-        };
-        Settings {
-            fps: fps.value(),
-            average_bitrate_bps: bitrate.average_bps(),
-            clip_seconds: duration.seconds(),
-        }
-        .save()
+    fn save_settings(&self) {
+        // TODO: surface save errors in the UI, there is no logger in this crate yet
+        let _ = self.settings.save();
     }
 }
 
 fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Message> {
     let selected: bool = state.selected_sidebar_tab == tab;
 
-    button(row![style::icon(tab.icon_bytes(), selected), tab.name()].spacing(8))
+    button(row![style::sidebar_icon(tab.icon_bytes(), selected), tab.name()].spacing(8))
         .width(Length::Fill)
         .on_press(Message::Navigate(tab))
         .padding(style::BUTTON_PADDING)
@@ -227,190 +80,20 @@ fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Messa
         .into()
 }
 
-const GOP_FRAMES: f64 = 120.0;
-const PEAK_TO_AVERAGE: f64 = 2.0;
-
-fn estimate_ram_mb(state: &State) -> Option<(u64, u64)> {
-    let (fps, bitrate, duration) = (state.fps?, state.bitrate?, state.duration?);
-    let buffered_seconds = f64::from(duration.seconds()) + GOP_FRAMES / f64::from(fps.value());
-    let typical_mb = bitrate.average_bps() as f64 / 1_000_000.0 / 8.0 * buffered_seconds;
-    Some((
-        typical_mb.round() as u64,
-        (typical_mb * PEAK_TO_AVERAGE).round() as u64,
-    ))
-}
-
-fn styled_pick_list<'a, T>(
-    options: &'a [T],
-    selected: Option<T>,
-    on_selected: impl Fn(T) -> Message + 'a,
-) -> Element<'a, Message>
-where
-    T: ToString + PartialEq + Clone + 'a,
-{
-    pick_list(options, selected, on_selected)
-        .style(style::dropdown)
-        .menu_style(style::dropdown_menu)
-        .width(style::CONTROL_WIDTH)
-        .padding(style::PICK_LIST_PADDING)
-        .into()
-}
-
-fn construct_ram_infobox<'a>(typical: u64, peak: u64) -> Element<'a, Message> {
-    let figures = column![
-        text(format!(
-            "Your configuration will use about {typical} MB RAM"
-        ))
-        .font(Font {
-            weight: Weight::Bold,
-            ..Font::DEFAULT
-        }),
-        text(format!("Up to {peak} MB in very busy scenes"))
-            .size(style::LABEL_SIZE)
-            .color(style::MUTED),
-    ]
-    .spacing(4);
-
-    container(
-        row![
-            style::accent_icon(include_bytes!("../assets/info.svg")),
-            figures
-        ]
-        .spacing(style::SECTION_SPACING)
-        .align_y(Alignment::Start),
-    )
-    .style(style::card)
-    .padding(14)
-    .width(Length::Fill)
-    .into()
-}
-
-fn construct_setting_row<'a>(
-    label: &'a str,
-    control: Element<'a, Message>,
-) -> Element<'a, Message> {
-    row![text(label).width(Length::Fill), control]
-        .spacing(style::SECTION_SPACING)
-        .align_y(Alignment::Center)
-        .into()
-}
-
-fn format_saved_at(unix_secs: u64) -> Option<String> {
-    let saved = DateTime::from_timestamp(i64::try_from(unix_secs).ok()?, 0)?.with_timezone(&Local);
-    let today = Local::now().date_naive();
-    let saved_day = saved.date_naive();
-
-    Some(if saved_day == today {
-        saved.format("%H:%M").to_string()
-    } else if today.pred_opt() == Some(saved_day) {
-        String::from("Yesterday")
-    } else if saved_day.year() == today.year() {
-        saved.format("%b %-d").to_string()
-    } else {
-        saved.format("%b %-d, %Y").to_string()
-    })
-}
-
-fn construct_clip_cards() -> Vec<Element<'static, Message>> {
-    let Ok(entries) = fs::read_dir("clips") else {
-        return Vec::new();
+fn construct_main_view(state: &State) -> Element<'_, Message> {
+    let tab = state.selected_sidebar_tab;
+    let page = match tab {
+        SidebarTab::Library => library::view(&state.clips),
+        SidebarTab::Settings => settings::view(&state.settings),
     };
 
-    let mut cards: Vec<(u64, Element<'static, Message>)> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "mp4") {
-            continue;
-        }
-        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-
-        let meta = ClipMeta::load(&path.with_extension("json")).ok().flatten();
-        let duration_secs = meta.as_ref().map(|meta| meta.duration_secs);
-        let size_mb = fs::metadata(&path).map(|file| file.len() as f64 / 1_000_000.0);
-        let details = meta.as_ref().map(|meta| {
-            let mut details = format!("{}x{} · {} fps", meta.width, meta.height, meta.fps);
-            if let Ok(size_mb) = size_mb {
-                details.push_str(&format!(" · {size_mb:.1} MB"));
-            }
-            details
-        });
-        let saved_at_unix_secs = meta.as_ref().map_or(0, |meta| meta.saved_at_unix_secs);
-        let saved_at = meta
-            .as_ref()
-            .and_then(|meta| format_saved_at(meta.saved_at_unix_secs));
-        let title = meta
-            .and_then(|meta| meta.title)
-            .unwrap_or_else(|| String::from("Unnamed Clip"));
-
-        let card = mouse_area(
-            column![
-                style::clip_thumbnail(format!("clips/{id}.jpg"), duration_secs),
-                row![style::clip_title(title).width(Length::Fill)]
-                    .extend(saved_at.map(|saved_at| Element::from(style::clip_details(saved_at))))
-                    .spacing(style::CARD_TEXT_SPACING * 2.0)
-                    .align_y(Alignment::Center),
-            ]
-            .extend(details.map(|details| Element::from(style::clip_details(details))))
-            .spacing(style::CARD_TEXT_SPACING),
-        )
-        .on_press(Message::ClipClicked(path.clone()))
-        .into();
-        cards.push((saved_at_unix_secs, card));
-    }
-
-    cards.sort_by_key(|(saved_at_unix_secs, _)| std::cmp::Reverse(*saved_at_unix_secs));
-    cards.into_iter().map(|(_, card)| card).collect()
-}
-
-fn construct_main_view(state: &State) -> Element<'_, Message> {
-    match state.selected_sidebar_tab {
-        SidebarTab::Library => {
-            let cards = construct_clip_cards();
-            let clips: Element<'_, Message> = if cards.is_empty() {
-                style::empty_state("No clips yet", "Come back here once you recorded a clip")
-            } else {
-                grid(cards).spacing(10).into()
-            };
-
-            container(
-                column![style::heading("Library"), clips]
-                    .spacing(style::SECTION_SPACING)
-                    .max_width(style::CONTENT_MAX_WIDTH),
-            )
-            .padding(style::PAGE_PADDING)
-            .center_x(Length::Fill)
-        }
-        SidebarTab::Settings => container(
-            column![
-                style::heading("Settings"),
-                construct_setting_row(
-                    "Recording FPS",
-                    styled_pick_list(FPSOptions::ALL, state.fps, Message::FPSChanged),
-                ),
-                construct_setting_row(
-                    "Average bitrate",
-                    styled_pick_list(BitrateOptions::ALL, state.bitrate, Message::BitrateChanged),
-                ),
-                construct_setting_row(
-                    "Clip duration",
-                    styled_pick_list(
-                        DurationOptions::ALL,
-                        state.duration,
-                        Message::DurationChanged
-                    ),
-                ),
-            ]
-            .extend(
-                estimate_ram_mb(state).map(|(typical, peak)| construct_ram_infobox(typical, peak)),
-            )
+    container(
+        column![style::heading(tab.name()), page]
             .spacing(style::SECTION_SPACING)
             .max_width(style::CONTENT_MAX_WIDTH),
-        )
-        .padding(style::PAGE_PADDING)
-        .center_x(Length::Fill),
-    }
+    )
+    .padding(style::PAGE_PADDING)
+    .center_x(Length::Fill)
     .into()
 }
 
@@ -435,20 +118,29 @@ fn view(state: &State) -> Element<'_, Message> {
 
 fn update(state: &mut State, message: Message) {
     match message {
-        Message::Navigate(page) => {
-            state.selected_sidebar_tab = page;
-            return;
+        Message::Navigate(tab) => {
+            state.selected_sidebar_tab = tab;
+            if tab == SidebarTab::Library {
+                state.clips = library::load_clips();
+            }
         }
-        Message::FPSChanged(selected) => state.fps = Some(selected),
-        Message::BitrateChanged(selected) => state.bitrate = Some(selected),
-        Message::DurationChanged(selected) => state.duration = Some(selected),
+        Message::FPSChanged(selected) => {
+            state.settings.fps = Some(selected);
+            state.save_settings();
+        }
+        Message::BitrateChanged(selected) => {
+            state.settings.bitrate = Some(selected);
+            state.save_settings();
+        }
+        Message::DurationChanged(selected) => {
+            state.settings.duration = Some(selected);
+            state.save_settings();
+        }
         Message::ClipClicked(video_path) => {
             // TODO: surface spawn errors in the UI
             let _ = Command::new("xdg-open").arg(video_path).spawn();
         }
     }
-    // TODO: surface save errors in the UI, there is no logger in this crate yet
-    let _ = state.save();
 }
 
 fn theme(_state: &State) -> Theme {

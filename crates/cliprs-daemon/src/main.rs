@@ -13,11 +13,10 @@ use std::error::Error;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cliprs_ipc::{Capabilities, Settings};
+use cliprs_ipc::{CLIPS_DIR, Capabilities, Settings};
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
-const CLIPS_DIR: &str = "clips";
 
 fn recording_loop(
     card: &kms::Card,
