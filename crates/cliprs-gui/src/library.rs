@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Local};
 use cliprs_ipc::{CLIPS_DIR, ClipMeta};
-use iced::widget::{column, container, grid, image, mouse_area, row, stack, text};
+use iced::widget::{column, container, grid, image, mouse_area, row, scrollable, stack, text};
 use iced::{Alignment, ContentFit, Element, Length};
 
 use crate::{Message, style};
@@ -152,6 +152,8 @@ pub fn view(clips: &[Clip]) -> Element<'_, Message> {
     if clips.is_empty() {
         empty_state()
     } else {
-        grid(clips.iter().map(clip_card)).spacing(10).into()
+        scrollable(grid(clips.iter().map(clip_card)).spacing(10))
+            .spacing(10)
+            .into()
     }
 }
