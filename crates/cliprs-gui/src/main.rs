@@ -3,12 +3,15 @@ mod style;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::path::PathBuf;
+use std::process::Command;
 
 use chrono::{DateTime, Datelike, Local};
 use cliprs_ipc::ClipMeta;
 use cliprs_ipc::Settings;
 use iced::font::Weight;
 use iced::widget::grid;
+use iced::widget::mouse_area;
 use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Element, Font, Length, Theme};
 
@@ -18,6 +21,7 @@ enum Message {
     FPSChanged(FPSOptions),
     BitrateChanged(BitrateOptions),
     DurationChanged(DurationOptions),
+    ClipClicked(PathBuf),
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
@@ -340,15 +344,18 @@ fn construct_clip_cards() -> Vec<Element<'static, Message>> {
             .and_then(|meta| meta.title)
             .unwrap_or_else(|| String::from("Unnamed Clip"));
 
-        let card = column![
-            style::clip_thumbnail(format!("clips/{id}.jpg"), duration_secs),
-            row![style::clip_title(title).width(Length::Fill)]
-                .extend(saved_at.map(|saved_at| Element::from(style::clip_details(saved_at))))
-                .spacing(style::CARD_TEXT_SPACING * 2.0)
-                .align_y(Alignment::Center),
-        ]
-        .extend(details.map(|details| Element::from(style::clip_details(details))))
-        .spacing(style::CARD_TEXT_SPACING)
+        let card = mouse_area(
+            column![
+                style::clip_thumbnail(format!("clips/{id}.jpg"), duration_secs),
+                row![style::clip_title(title).width(Length::Fill)]
+                    .extend(saved_at.map(|saved_at| Element::from(style::clip_details(saved_at))))
+                    .spacing(style::CARD_TEXT_SPACING * 2.0)
+                    .align_y(Alignment::Center),
+            ]
+            .extend(details.map(|details| Element::from(style::clip_details(details))))
+            .spacing(style::CARD_TEXT_SPACING),
+        )
+        .on_press(Message::ClipClicked(path.clone()))
         .into();
         cards.push((saved_at_unix_secs, card));
     }
@@ -435,6 +442,10 @@ fn update(state: &mut State, message: Message) {
         Message::FPSChanged(selected) => state.fps = Some(selected),
         Message::BitrateChanged(selected) => state.bitrate = Some(selected),
         Message::DurationChanged(selected) => state.duration = Some(selected),
+        Message::ClipClicked(video_path) => {
+            // TODO: surface spawn errors in the UI
+            let _ = Command::new("xdg-open").arg(video_path).spawn();
+        }
     }
     // TODO: surface save errors in the UI, there is no logger in this crate yet
     let _ = state.save();
