@@ -1,7 +1,12 @@
 use std::env;
+use std::ffi::{CStr, OsStr};
 use std::fs;
 use std::io;
+use std::mem::MaybeUninit;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::chown;
 use std::path::{Path, PathBuf};
+use std::ptr;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -81,7 +86,46 @@ impl ClipMeta {
     }
 }
 
+// The daemon runs as root for DRM and evdev access, so files it creates would otherwise be root-owned.
+pub fn give_to_invoking_user(path: &Path) -> io::Result<()> {
+    let (Some(uid), Some(gid)) = (sudo_id("SUDO_UID"), sudo_id("SUDO_GID")) else {
+        return Ok(());
+    };
+    chown(path, Some(uid), Some(gid))
+}
+
+fn sudo_id(name: &str) -> Option<u32> {
+    env::var(name).ok()?.parse().ok()
+}
+
+fn invoking_user_home(uid: u32) -> io::Result<PathBuf> {
+    let mut passwd = MaybeUninit::<libc::passwd>::uninit();
+    let mut strings = [0 as libc::c_char; 4096];
+    let mut entry = ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            uid,
+            passwd.as_mut_ptr(),
+            strings.as_mut_ptr(),
+            strings.len(),
+            &mut entry,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status));
+    }
+    if entry.is_null() {
+        return Err(io::Error::other(format!("no passwd entry for uid {uid}")));
+    }
+    let home = unsafe { CStr::from_ptr((*entry).pw_dir) };
+    Ok(PathBuf::from(OsStr::from_bytes(home.to_bytes())))
+}
+
 fn config_dir() -> io::Result<PathBuf> {
+    // sudo resets HOME to /root and drops XDG_CONFIG_HOME, which would split the daemon's config from the GUI's.
+    if let Some(uid) = sudo_id("SUDO_UID") {
+        return Ok(invoking_user_home(uid)?.join(".config").join(APP_DIR));
+    }
     let base = match env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from(
@@ -111,11 +155,15 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 
 // Rename is atomic, so a concurrent reader never sees a half-written file.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
         fs::create_dir_all(parent)?;
+        give_to_invoking_user(parent)?;
     }
     let temp_path = path.with_extension("json.tmp");
     fs::write(&temp_path, serde_json::to_vec_pretty(value)?)?;
+    give_to_invoking_user(&temp_path)?;
     fs::rename(&temp_path, path)
 }
 

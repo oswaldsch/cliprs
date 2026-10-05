@@ -3,7 +3,6 @@ mod encode;
 mod hotkeys;
 mod kms;
 mod muxer;
-mod ownership;
 mod readback;
 mod stitch;
 mod thumbnail;
@@ -13,7 +12,7 @@ use std::error::Error;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cliprs_ipc::{CLIPS_DIR, Capabilities, Settings};
+use cliprs_ipc::{CLIPS_DIR, Capabilities, Settings, give_to_invoking_user};
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
@@ -40,7 +39,7 @@ fn recording_loop(
             let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
             let mut capture = capture::Capture::new(vk, &frame)?;
             thumbnail::save_thumbnail(&mut capture, &frame, &thumbnail_path)?;
-            ownership::give_to_invoking_user(thumbnail_path.as_ref())?;
+            give_to_invoking_user(thumbnail_path.as_ref())?;
         }
         i += 1;
     }

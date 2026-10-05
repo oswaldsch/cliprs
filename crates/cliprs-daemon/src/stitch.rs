@@ -4,12 +4,11 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cliprs_ipc::{ClipMeta, Settings};
+use cliprs_ipc::{ClipMeta, Settings, give_to_invoking_user};
 
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
 use crate::muxer::write_mp4;
-use crate::ownership::give_to_invoking_user;
 use crate::vulkan::{VulkanDevice, vk_format};
 
 pub struct Recording<'a> {
@@ -87,7 +86,6 @@ impl<'a> Recording<'a> {
             height,
         }
         .save(&sidecar_path)?;
-        give_to_invoking_user(&sidecar_path)?;
 
         // Rename last so a visible .mp4 always has its sidecar.
         fs::rename(part_path, clip_path)?;
