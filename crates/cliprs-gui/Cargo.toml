@@ -11,3 +11,4 @@ iced = { version = "0.14.0", features = ["svg", "image"] }
 log = "0.4.34"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+webm-iterable = "0.7.1"

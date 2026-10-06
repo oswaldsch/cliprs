@@ -12,9 +12,12 @@ use std::ptr;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const CLIPS_DIR: &str = "clips";
-
 const APP_DIR: &str = "cliprs";
+const CLIPS_SUBDIR: &str = "Clips";
+const THUMBNAILS_SUBDIR: &str = "thumbnails";
+const USER_DIRS_FILE: &str = "user-dirs.dirs";
+const VIDEOS_DIR_KEY: &str = "XDG_VIDEOS_DIR=";
+const DEFAULT_VIDEOS_SUBDIR: &str = "Videos";
 const SETTINGS_FILE: &str = "settings.json";
 const CAPABILITIES_FILE: &str = "capabilities.json";
 const OVERLAY_SOCKET_FILE: &str = "cliprs-overlay.sock";
@@ -80,13 +83,24 @@ pub struct ClipMeta {
 }
 
 impl ClipMeta {
-    pub fn load(path: &Path) -> io::Result<Option<ClipMeta>> {
-        read_json(path)
+    pub fn load(id: &str) -> io::Result<Option<ClipMeta>> {
+        read_json(&clip_meta_path(id)?)
     }
 
-    pub fn save(&self, path: &Path) -> io::Result<()> {
-        write_json(path, self)
+    pub fn save(&self, id: &str) -> io::Result<()> {
+        write_json(&clip_meta_path(id)?, self)
     }
+}
+
+pub fn clips_dir() -> io::Result<PathBuf> {
+    Ok(videos_dir()?.join(CLIPS_SUBDIR))
+}
+
+pub fn thumbnail_path(id: &str) -> io::Result<PathBuf> {
+    Ok(xdg_base_dir("XDG_CACHE_HOME", ".cache")?
+        .join(APP_DIR)
+        .join(THUMBNAILS_SUBDIR)
+        .join(format!("{id}.jpg")))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,6 +165,17 @@ pub fn give_to_invoking_user(path: &Path) -> io::Result<()> {
     chown(path, Some(uid), Some(gid))
 }
 
+pub fn create_user_dir(dir: &Path) -> io::Result<()> {
+    if dir.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        create_user_dir(parent)?;
+    }
+    fs::create_dir(dir)?;
+    give_to_invoking_user(dir)
+}
+
 fn sudo_id(name: &str) -> Option<u32> {
     env::var(name).ok()?.parse().ok()
 }
@@ -178,20 +203,56 @@ fn invoking_user_home(uid: u32) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsStr::from_bytes(home.to_bytes())))
 }
 
-fn config_dir() -> io::Result<PathBuf> {
-    // sudo resets HOME to /root and drops XDG_CONFIG_HOME, which would split the daemon's config from the GUI's.
+fn home_dir() -> io::Result<PathBuf> {
+    // sudo resets HOME to /root, which would split the daemon's files from the GUI's.
     if let Some(uid) = sudo_id("SUDO_UID") {
-        return Ok(invoking_user_home(uid)?.join(".config").join(APP_DIR));
+        return invoking_user_home(uid);
     }
-    let base = match env::var_os("XDG_CONFIG_HOME") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from(
-            env::var_os("HOME")
-                .ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?,
-        )
-        .join(".config"),
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("HOME is not set"))
+}
+
+fn xdg_base_dir(variable: &str, home_fallback: &str) -> io::Result<PathBuf> {
+    // sudo drops the XDG variables, so under sudo only the default location is known.
+    if sudo_id("SUDO_UID").is_none()
+        && let Some(dir) = env::var_os(variable)
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(home_dir()?.join(home_fallback))
+}
+
+fn config_dir() -> io::Result<PathBuf> {
+    Ok(xdg_base_dir("XDG_CONFIG_HOME", ".config")?.join(APP_DIR))
+}
+
+fn clip_meta_path(id: &str) -> io::Result<PathBuf> {
+    Ok(xdg_base_dir("XDG_DATA_HOME", ".local/share")?
+        .join(APP_DIR)
+        .join(format!("{id}.json")))
+}
+
+fn videos_dir() -> io::Result<PathBuf> {
+    let home = home_dir()?;
+    let user_dirs = xdg_base_dir("XDG_CONFIG_HOME", ".config")?.join(USER_DIRS_FILE);
+    let configured = fs::read_to_string(user_dirs)
+        .ok()
+        .and_then(|user_dirs| parse_videos_dir(&user_dirs, &home));
+    Ok(configured.unwrap_or_else(|| home.join(DEFAULT_VIDEOS_SUBDIR)))
+}
+
+fn parse_videos_dir(user_dirs: &str, home: &Path) -> Option<PathBuf> {
+    let value = user_dirs
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(VIDEOS_DIR_KEY))?
+        .trim_matches('"');
+    let dir = match value.strip_prefix("$HOME") {
+        Some(relative) => home.join(relative.trim_start_matches('/')),
+        None => PathBuf::from(value),
     };
-    Ok(base.join(APP_DIR))
+    dir.is_absolute().then_some(dir)
 }
 
 fn settings_path() -> io::Result<PathBuf> {
@@ -227,11 +288,8 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 
 // Rename is atomic, so a concurrent reader never sees a half-written file.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent)?;
-        give_to_invoking_user(parent)?;
+    if let Some(parent) = path.parent() {
+        create_user_dir(parent)?;
     }
     let temp_path = path.with_extension("json.tmp");
     fs::write(&temp_path, serde_json::to_vec_pretty(value)?)?;
@@ -258,6 +316,22 @@ mod tests {
         assert_eq!(read_json::<Settings>(&path).unwrap(), Some(settings));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn videos_dir_from_user_dirs() {
+        let home = Path::new("/home/someone");
+        let parse = |user_dirs| parse_videos_dir(user_dirs, home);
+        assert_eq!(
+            parse("XDG_MUSIC_DIR=\"$HOME/Musik\"\nXDG_VIDEOS_DIR=\"$HOME/Filme\"\n"),
+            Some(home.join("Filme"))
+        );
+        assert_eq!(
+            parse("XDG_VIDEOS_DIR=\"/mnt/media\""),
+            Some(PathBuf::from("/mnt/media"))
+        );
+        assert_eq!(parse("XDG_VIDEOS_DIR=\"media\""), None);
+        assert_eq!(parse("XDG_MUSIC_DIR=\"$HOME/Musik\""), None);
     }
 
     #[test]

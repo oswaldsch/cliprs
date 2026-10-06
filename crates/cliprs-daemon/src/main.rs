@@ -13,7 +13,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cliprs_ipc::{
-    CLIPS_DIR, Capabilities, Notification, Settings, give_to_invoking_user, notify, notify_error,
+    Capabilities, Notification, Settings, create_user_dir, give_to_invoking_user, notify,
+    notify_error,
 };
 use evdev::KeyCode;
 
@@ -26,11 +27,14 @@ fn save_clip(
 ) -> Result<String, Box<dyn Error>> {
     let id = uuid::Uuid::new_v4().to_string();
     log::info!("attempting to save clip {id}");
-    recording.save(CLIPS_DIR, &id)?;
-    let thumbnail_path = format!("{CLIPS_DIR}/{id}.jpg");
+    recording.save(&id)?;
+    let thumbnail_path = cliprs_ipc::thumbnail_path(&id)?;
+    if let Some(thumbnails_dir) = thumbnail_path.parent() {
+        create_user_dir(thumbnails_dir)?;
+    }
     let mut capture = capture::Capture::new(vk, frame)?;
     thumbnail::save_thumbnail(&mut capture, frame, &thumbnail_path)?;
-    give_to_invoking_user(thumbnail_path.as_ref())?;
+    give_to_invoking_user(&thumbnail_path)?;
     Ok(id)
 }
 

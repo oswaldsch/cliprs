@@ -1,16 +1,21 @@
 use std::cmp::Reverse;
-use std::fs;
-use std::path::PathBuf;
+use std::error::Error;
+use std::fs::{self, File};
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Datelike, Local};
-use cliprs_ipc::{CLIPS_DIR, ClipMeta};
+use cliprs_ipc::{ClipMeta, clips_dir, thumbnail_path};
 use iced::widget::{column, container, grid, image, mouse_area, row, scrollable, stack, text};
 use iced::{Alignment, ContentFit, Element, Length};
+use webm_iterable::WebmIterator;
+use webm_iterable::matroska_spec::{Master, MatroskaSpec};
 
 use crate::{Message, style};
 
 pub struct Clip {
     video_path: PathBuf,
+    thumbnail_path: PathBuf,
     title: String,
     details: Option<String>,
     saved_at_unix_secs: Option<u64>,
@@ -18,14 +23,14 @@ pub struct Clip {
 }
 
 pub fn load_clips() -> Vec<Clip> {
-    let Ok(entries) = fs::read_dir(CLIPS_DIR) else {
+    let Ok(entries) = clips_dir().and_then(fs::read_dir) else {
         return Vec::new();
     };
 
     let mut clips: Vec<Clip> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "mkv" || ext == "mp4"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "mkv"))
         .map(load_clip)
         .collect();
     clips.sort_by_key(|clip| Reverse(clip.saved_at_unix_secs));
@@ -33,9 +38,14 @@ pub fn load_clips() -> Vec<Clip> {
 }
 
 fn load_clip(video_path: PathBuf) -> Clip {
-    let meta = ClipMeta::load(&video_path.with_extension("json"))
-        .ok()
-        .flatten();
+    let id = read_tag(&video_path, "CLIPRS_UUID").ok().flatten();
+    let meta = id
+        .as_deref()
+        .and_then(|id| ClipMeta::load(id).ok().flatten());
+    let thumbnail_path = id
+        .as_deref()
+        .and_then(|id| thumbnail_path(id).ok())
+        .unwrap_or_default();
     let size_mb = fs::metadata(&video_path).map(|file| file.len() as f64 / 1_000_000.0);
     let details = meta.as_ref().map(|meta| {
         let mut details = format!("{}x{} · {} fps", meta.width, meta.height, meta.fps);
@@ -47,6 +57,7 @@ fn load_clip(video_path: PathBuf) -> Clip {
 
     Clip {
         video_path,
+        thumbnail_path,
         details,
         saved_at_unix_secs: meta.as_ref().map(|meta| meta.saved_at_unix_secs),
         duration_secs: meta.as_ref().map(|meta| meta.duration_secs),
@@ -54,6 +65,30 @@ fn load_clip(video_path: PathBuf) -> Clip {
             .and_then(|meta| meta.title)
             .unwrap_or_else(|| String::from("Unnamed Clip")),
     }
+}
+
+fn read_tag(video_path: &Path, wanted: &str) -> Result<Option<String>, Box<dyn Error>> {
+    let mut file = BufReader::new(File::open(video_path)?);
+    let tags = WebmIterator::new(&mut file, &[MatroskaSpec::SimpleTag(Master::Start)]);
+    for tag in tags {
+        match tag? {
+            MatroskaSpec::SimpleTag(Master::Full(children)) => {
+                let name = children.iter().find_map(|child| match child {
+                    MatroskaSpec::TagName(name) => Some(name.as_str()),
+                    _ => None,
+                });
+                if name == Some(wanted) {
+                    return Ok(children.into_iter().find_map(|child| match child {
+                        MatroskaSpec::TagString(value) => Some(value),
+                        _ => None,
+                    }));
+                }
+            }
+            MatroskaSpec::Cluster(_) => break,
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 fn format_saved_at(unix_secs: u64) -> Option<String> {
@@ -83,12 +118,10 @@ fn format_duration(secs: f64) -> String {
 }
 
 fn clip_thumbnail(clip: &Clip) -> Element<'_, Message> {
-    let thumbnail = image::Image::new(image::Handle::from_path(
-        clip.video_path.with_extension("jpg"),
-    ))
-    .width(Length::Fill)
-    .content_fit(ContentFit::Contain)
-    .border_radius(style::RADIUS);
+    let thumbnail = image::Image::new(image::Handle::from_path(&clip.thumbnail_path))
+        .width(Length::Fill)
+        .content_fit(ContentFit::Contain)
+        .border_radius(style::RADIUS);
     let Some(duration_secs) = clip.duration_secs else {
         return thumbnail.into();
     };

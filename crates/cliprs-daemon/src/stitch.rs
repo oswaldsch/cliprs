@@ -1,10 +1,9 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cliprs_ipc::{ClipMeta, Settings, give_to_invoking_user};
+use cliprs_ipc::{ClipMeta, Settings, clips_dir, create_user_dir, give_to_invoking_user};
 
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
@@ -64,30 +63,28 @@ impl<'a> Recording<'a> {
         Ok(())
     }
 
-    pub fn save(&mut self, clips_dir: impl AsRef<Path>, id: &str) -> Result<(), Box<dyn Error>> {
+    pub fn save(&mut self, id: &str) -> Result<(), Box<dyn Error>> {
         let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
 
-        let clips_dir = clips_dir.as_ref();
-        fs::create_dir_all(clips_dir)?;
-        give_to_invoking_user(clips_dir)?;
+        let clips_dir = clips_dir()?;
+        create_user_dir(&clips_dir)?;
         let samples = VecDeque::make_contiguous(&mut self.samples);
         let clip_path = clips_dir.join(format!("{id}.mkv"));
         let part_path = clips_dir.join(format!("{id}.mkv.part"));
-        write_mkv(&part_path, &samples, width, height, self.settings.fps)?;
-        give_to_invoking_user(&part_path)?;
-
-        let sidecar_path = clips_dir.join(format!("{id}.json"));
-        ClipMeta {
+        let meta = ClipMeta {
             title: None,
             saved_at_unix_secs: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             duration_secs: samples.len() as f64 / f64::from(self.settings.fps),
             fps: self.settings.fps,
             width,
             height,
-        }
-        .save(&sidecar_path)?;
+        };
+        write_mkv(&part_path, samples, id, &meta)?;
+        give_to_invoking_user(&part_path)?;
 
-        // Rename last so a visible .mkv always has its sidecar.
+        meta.save(id)?;
+
+        // Rename last so a visible .mkv always has its meta.
         fs::rename(part_path, clip_path)?;
         Ok(())
     }

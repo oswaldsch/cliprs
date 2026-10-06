@@ -718,6 +718,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "webm-iterable",
 ]
 
 [[package]]

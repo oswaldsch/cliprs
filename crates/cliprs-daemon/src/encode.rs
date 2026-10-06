@@ -1310,9 +1310,15 @@ mod tests {
         crate::muxer::write_mkv(
             std::path::Path::new(&format!("{OUT_DIR}/test.mkv")),
             &samples,
-            extent.width,
-            extent.height,
-            60,
+            "synthetic",
+            &cliprs_ipc::ClipMeta {
+                title: Some("synthetic frames".to_string()),
+                saved_at_unix_secs: 1_700_000_000,
+                duration_secs: samples.len() as f64 / 60.0,
+                fps: 60,
+                width: extent.width,
+                height: extent.height,
+            },
         )
         .unwrap();
 

@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
 
+use cliprs_ipc::ClipMeta;
 use webm_iterable::matroska_spec::{Master, MatroskaSpec, SimpleBlock};
 use webm_iterable::{WebmWriter, WriteOptions};
 
@@ -14,6 +15,11 @@ const TRACK_NUMBER: u64 = 1;
 const TRACK_TYPE_VIDEO: u64 = 1;
 const CODEC_ID: &str = "V_MPEG4/ISO/AVC";
 const APP_NAME: &str = "cliprs";
+const UUID_TAG: &str = "CLIPRS_UUID";
+// ffmpeg drops DateUTC when re-encoding but keeps custom tags.
+const SAVED_AT_TAG: &str = "CLIPRS_SAVED_AT_UNIX_SECS";
+// Matroska dates count nanoseconds from 2001-01-01 UTC.
+const MATROSKA_EPOCH_UNIX_SECS: i64 = 978_307_200;
 const NANOS_PER_MILLI: u64 = 1_000_000;
 const NANOS_PER_SEC: u64 = 1_000_000_000;
 const CUES_ID: [u8; 4] = [0x1C, 0x53, 0xBB, 0x6B];
@@ -28,16 +34,15 @@ const AVCC_ONE_PPS: u8 = 1;
 pub fn write_mkv(
     path: &Path,
     samples: &[Sample],
-    width: u32,
-    height: u32,
-    fps: u32,
+    id: &str,
+    meta: &ClipMeta,
 ) -> Result<(), Box<dyn Error>> {
     let first = samples.first().ok_or("no samples to mux")?;
     let first_nals = split_nal_units(&first.data);
     let sps = find_nal(&first_nals, NAL_SPS).ok_or("first sample has no SPS")?;
     let pps = find_nal(&first_nals, NAL_PPS).ok_or("first sample has no PPS")?;
 
-    let fps = u64::from(fps);
+    let fps = u64::from(meta.fps);
     let timestamp_ms = |frame: usize| frame as u64 * 1000 / fps;
 
     let mut writer = WebmWriter::new(File::create(path)?);
@@ -59,12 +64,18 @@ pub fn write_mkv(
     let segment_start = writer.get_mut().stream_position()? + SEGMENT_HEADER_LEN;
     write_seek_head(&mut writer, 0)?;
 
-    writer.write(&MatroskaSpec::Info(Master::Full(vec![
+    let saved_at_matroska_secs = i64::try_from(meta.saved_at_unix_secs)? - MATROSKA_EPOCH_UNIX_SECS;
+    let mut info = vec![
         MatroskaSpec::TimestampScale(NANOS_PER_MILLI),
-        MatroskaSpec::Duration(samples.len() as f64 * 1000.0 / fps as f64),
+        MatroskaSpec::Duration(meta.duration_secs * 1000.0),
+        MatroskaSpec::DateUTC(saved_at_matroska_secs * NANOS_PER_SEC as i64),
         MatroskaSpec::MuxingApp(APP_NAME.to_string()),
         MatroskaSpec::WritingApp(APP_NAME.to_string()),
-    ])))?;
+    ];
+    if let Some(title) = &meta.title {
+        info.push(MatroskaSpec::Title(title.clone()));
+    }
+    writer.write(&MatroskaSpec::Info(Master::Full(info)))?;
 
     writer.write(&MatroskaSpec::Tracks(Master::Full(vec![
         MatroskaSpec::TrackEntry(Master::Full(vec![
@@ -76,11 +87,19 @@ pub fn write_mkv(
             MatroskaSpec::CodecPrivate(avc_decoder_config(sps, pps)?),
             MatroskaSpec::DefaultDuration(NANOS_PER_SEC / fps),
             MatroskaSpec::Video(Master::Full(vec![
-                MatroskaSpec::PixelWidth(u64::from(width)),
-                MatroskaSpec::PixelHeight(u64::from(height)),
+                MatroskaSpec::PixelWidth(u64::from(meta.width)),
+                MatroskaSpec::PixelHeight(u64::from(meta.height)),
             ])),
         ])),
     ])))?;
+
+    writer.write(&MatroskaSpec::Tags(Master::Full(vec![MatroskaSpec::Tag(
+        Master::Full(vec![
+            MatroskaSpec::Targets(Master::Full(vec![])),
+            simple_tag(UUID_TAG, id),
+            simple_tag(SAVED_AT_TAG, &meta.saved_at_unix_secs.to_string()),
+        ]),
+    )])))?;
 
     let mut cue_points = Vec::new();
     let mut frame = 0;
@@ -135,6 +154,13 @@ fn write_seek_head(
     writer.write(&MatroskaSpec::Seek(Master::End))?;
     writer.write(&MatroskaSpec::SeekHead(Master::End))?;
     Ok(())
+}
+
+fn simple_tag(name: &str, value: &str) -> MatroskaSpec {
+    MatroskaSpec::SimpleTag(Master::Full(vec![
+        MatroskaSpec::TagName(name.to_string()),
+        MatroskaSpec::TagString(value.to_string()),
+    ]))
 }
 
 fn avc_decoder_config(sps: &[u8], pps: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
