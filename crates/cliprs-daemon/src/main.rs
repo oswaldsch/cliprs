@@ -8,13 +8,14 @@ mod stitch;
 mod thumbnail;
 mod vulkan;
 
+use std::env;
 use std::error::Error;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use cliprs_ipc::{
     Capabilities, InstanceLock, Notification, Process, Settings, create_user_dir,
-    give_to_invoking_user, notify, notify_error,
+    give_to_invoking_user, install, notify, notify_error,
 };
 use evdev::KeyCode;
 
@@ -97,6 +98,14 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    if env::args().nth(1).as_deref() == Some(install::INSTALL_ARGUMENT) {
+        if let Err(error) = install::install_daemon_as_root() {
+            log::error!("install failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let _instance_lock = match InstanceLock::acquire(Process::Daemon) {
         Ok(lock) => lock,

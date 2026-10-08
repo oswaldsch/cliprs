@@ -1,21 +1,26 @@
 mod library;
 mod resources;
 mod settings;
+mod setup;
 mod style;
 
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use cliprs_ipc::{Process, ResourceSample, notify_error};
+use cliprs_ipc::{Process, ResourceSample, Settings, install, notify, notify_error};
+use iced::futures::channel::oneshot;
 use iced::widget::space::vertical;
 use iced::widget::{button, column, container, row};
-use iced::{Element, Length, Subscription, Theme};
+use iced::{Element, Length, Subscription, Task, Theme};
 
 use library::Clip;
 use settings::{BitrateOptions, DurationOptions, FPSOptions};
 
 use crate::resources::construct_resource_tab;
+
+const DEBUG_SETUP: bool = true;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -23,6 +28,8 @@ enum Message {
     FPSChanged(FPSOptions),
     BitrateChanged(BitrateOptions),
     DurationChanged(DurationOptions),
+    ApplySettings,
+    SettingsApplied(Result<(), String>),
     ClipClicked(PathBuf),
     ResourceTick,
 }
@@ -54,6 +61,7 @@ impl SidebarTab {
 struct State {
     selected_sidebar_tab: SidebarTab,
     settings: settings::Form,
+    applying_settings: bool,
     clips: Vec<Clip>,
     resource_sample: Option<ResourceSample>,
     cpu_percent: Option<f32>,
@@ -64,18 +72,25 @@ impl State {
         State {
             selected_sidebar_tab: SidebarTab::default(),
             settings: settings::Form::load(),
+            applying_settings: false,
             clips: library::load_clips(),
             resource_sample: None,
             cpu_percent: None,
         }
     }
+}
 
-    fn save_settings(&self) {
-        if let Err(error) = self.settings.save() {
-            log::error!("settings save failed: {error}");
-            notify_error(format!("Could not save settings: {error}"));
-        }
-    }
+// A polkit prompt blocks until answered, which would freeze the window on the UI thread.
+fn blocking_task(
+    work: impl FnOnce() -> io::Result<()> + Send + 'static,
+) -> Task<Result<(), String>> {
+    let (sender, receiver) = oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work().map_err(|error| error.to_string()));
+    });
+    Task::perform(receiver, |result| {
+        result.unwrap_or_else(|_| Err("background task stopped unexpectedly".into()))
+    })
 }
 
 fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Message> {
@@ -97,7 +112,7 @@ fn construct_main_view(state: &State) -> Element<'_, Message> {
     let tab = state.selected_sidebar_tab;
     let page = match tab {
         SidebarTab::Library => library::view(&state.clips),
-        SidebarTab::Settings => settings::view(&state.settings),
+        SidebarTab::Settings => settings::view(&state.settings, state.applying_settings),
     };
 
     container(
@@ -134,7 +149,7 @@ fn view(state: &State) -> Element<'_, Message> {
     container(row![sidebar_container, main_view]).into()
 }
 
-fn update(state: &mut State, message: Message) {
+fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::Navigate(tab) => {
             state.selected_sidebar_tab = tab;
@@ -142,17 +157,25 @@ fn update(state: &mut State, message: Message) {
                 state.clips = library::load_clips();
             }
         }
-        Message::FPSChanged(selected) => {
-            state.settings.fps = Some(selected);
-            state.save_settings();
-        }
-        Message::BitrateChanged(selected) => {
-            state.settings.bitrate = Some(selected);
-            state.save_settings();
-        }
-        Message::DurationChanged(selected) => {
-            state.settings.duration = Some(selected);
-            state.save_settings();
+        Message::FPSChanged(selected) => state.settings.fps = Some(selected),
+        Message::BitrateChanged(selected) => state.settings.bitrate = Some(selected),
+        Message::DurationChanged(selected) => state.settings.duration = Some(selected),
+        Message::ApplySettings => match state.settings.save() {
+            Ok(()) => {
+                state.applying_settings = true;
+                return blocking_task(install::restart_daemon).map(Message::SettingsApplied);
+            }
+            Err(error) => {
+                log::error!("settings save failed: {error}");
+                notify_error(format!("Could not save settings: {error}"));
+            }
+        },
+        Message::SettingsApplied(result) => {
+            state.applying_settings = false;
+            if let Err(error) = result {
+                log::error!("daemon restart failed: {error}");
+                notify_error(format!("Settings saved, but the restart failed: {error}"));
+            }
         }
         Message::ClipClicked(video_path) => {
             if let Err(error) = Command::new("xdg-open").arg(&video_path).spawn() {
@@ -175,6 +198,7 @@ fn update(state: &mut State, message: Message) {
             Err(error) => log::warn!("failed to sample daemon resources: {error}"),
         },
     }
+    Task::none()
 }
 
 fn core_count() -> f32 {
@@ -185,7 +209,64 @@ fn subscription(_state: &State) -> Subscription<Message> {
     iced::time::every(Duration::from_secs(1)).map(|_| Message::ResourceTick)
 }
 
-fn theme(_state: &State) -> Theme {
+enum Screen {
+    Setup(setup::State),
+    Main(State),
+}
+
+#[derive(Debug, Clone)]
+enum ScreenMessage {
+    Setup(setup::Message),
+    Main(Message),
+}
+
+fn boot() -> Screen {
+    if DEBUG_SETUP {
+        return Screen::Setup(setup::boot());
+    }
+
+    match Settings::check_setup() {
+        Ok(true) => Screen::Main(State::load()),
+        Ok(false) => Screen::Setup(setup::boot()),
+        Err(error) => {
+            log::error!("could not check for existence of config file: {error}");
+            notify_error(format!("Configuration file could not be opened: {error}"));
+            Screen::Setup(setup::boot())
+        }
+    }
+}
+
+fn update_screen(screen: &mut Screen, message: ScreenMessage) -> Task<ScreenMessage> {
+    match (&mut *screen, message) {
+        (Screen::Setup(state), ScreenMessage::Setup(message)) => {
+            let task = setup::update(state, message).map(ScreenMessage::Setup);
+            if state.finished() {
+                *screen = Screen::Main(State::load());
+            }
+            task
+        }
+        (Screen::Main(state), ScreenMessage::Main(message)) => {
+            update(state, message).map(ScreenMessage::Main)
+        }
+        _ => Task::none(),
+    }
+}
+
+fn view_screen(screen: &Screen) -> Element<'_, ScreenMessage> {
+    match screen {
+        Screen::Setup(state) => setup::view(state).map(ScreenMessage::Setup),
+        Screen::Main(state) => view(state).map(ScreenMessage::Main),
+    }
+}
+
+fn screen_subscription(screen: &Screen) -> Subscription<ScreenMessage> {
+    match screen {
+        Screen::Setup(_) => Subscription::none(),
+        Screen::Main(state) => subscription(state).map(ScreenMessage::Main),
+    }
+}
+
+fn theme(_screen: &Screen) -> Theme {
     style::theme()
 }
 
@@ -194,8 +275,9 @@ fn main() -> iced::Result {
         env_logger::Env::default().default_filter_or("warn,cliprs_gui=info,cliprs_ipc=info"),
     )
     .init();
-    iced::application(State::load, update, view)
+
+    iced::application(boot, update_screen, view_screen)
         .theme(theme)
-        .subscription(subscription)
+        .subscription(screen_subscription)
         .run()
 }

@@ -29,9 +29,13 @@ pub const PICK_LIST_PADDING: [f32; 2] = [8.0, 12.0];
 const TEXT_FIELD_PADDING: [f32; 2] = [8.0, 12.0];
 const SELECTION_ALPHA: f32 = 0.4;
 pub const HEADING_SIZE: f32 = 24.0;
+const SUBHEADING_SIZE: f32 = 16.0;
 pub const LABEL_SIZE: f32 = 14.0;
 pub const ICON_SIZE: f32 = 20.0;
 pub const CARD_TEXT_SPACING: f32 = 4.0;
+const CARD_SELECTED_BORDER_WIDTH: f32 = 2.0;
+pub const MONITOR_CARD_WIDTH: f32 = 220.0;
+pub const MONITOR_ICON_SIZE: f32 = 56.0;
 const CLIP_TITLE_SIZE: f32 = 15.0;
 const CLIP_DETAILS_SIZE: f32 = 12.0;
 pub const EMPTY_TITLE_SIZE: f32 = 18.0;
@@ -132,6 +136,68 @@ pub fn sidebar_button_selected(_theme: &Theme, status: button::Status) -> button
     }
 }
 
+pub fn primary_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Active => (ACCENT, Color::WHITE),
+        button::Status::Hovered => (ACCENT_HOVER, Color::WHITE),
+        button::Status::Pressed => (ACCENT_PRESSED, Color::WHITE),
+        button::Status::Disabled => (OUTLINE, MUTED),
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: rounded(Color::TRANSPARENT, 0.0),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+pub fn secondary_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let (background, border_color, text_color) = match status {
+        button::Status::Active => (RAISED, OUTLINE, TEXT),
+        button::Status::Hovered => (OUTLINE, MUTED, TEXT),
+        button::Status::Pressed => (SURFACE, MUTED, TEXT),
+        button::Status::Disabled => (SURFACE, OUTLINE, MUTED),
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: rounded(border_color, 1.0),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let (background, border_color, text_color) = match status {
+        button::Status::Active => (RAISED, OUTLINE, TEXT),
+        button::Status::Hovered => (RAISED, MUTED, TEXT),
+        button::Status::Pressed => (SURFACE, MUTED, TEXT),
+        button::Status::Disabled => (SURFACE, OUTLINE, MUTED),
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: rounded(border_color, 1.0),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+pub fn card_button_selected(_theme: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Pressed => SURFACE,
+        button::Status::Active | button::Status::Hovered | button::Status::Disabled => RAISED,
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: TEXT,
+        border: rounded(ACCENT, CARD_SELECTED_BORDER_WIDTH),
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
 pub fn dropdown(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     let border_color = match status {
         pick_list::Status::Active => OUTLINE,
@@ -220,6 +286,10 @@ pub fn accent_icon(bytes: &'static [u8]) -> Svg<'static> {
     })
 }
 
+pub fn plain_icon(bytes: &'static [u8]) -> Svg<'static> {
+    icon(bytes).style(|_theme, _status| svg::Style { color: Some(TEXT) })
+}
+
 pub fn stat_icon(bytes: &'static [u8]) -> Svg<'static> {
     icon(bytes)
         .width(STAT_ICON_SIZE)
@@ -232,7 +302,10 @@ pub fn stat_label<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
 }
 
 pub fn stat_value<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
-    text(content).size(STAT_SIZE).color(TEXT).font(Font::MONOSPACE)
+    text(content)
+        .size(STAT_SIZE)
+        .color(TEXT)
+        .font(Font::MONOSPACE)
 }
 
 pub fn usage_bar(_theme: &Theme) -> progress_bar::Style {
@@ -245,6 +318,10 @@ pub fn usage_bar(_theme: &Theme) -> progress_bar::Style {
 
 pub fn heading(content: &str) -> Text<'_> {
     text(content).size(HEADING_SIZE).font(BOLD)
+}
+
+pub fn subheading(content: &str) -> Text<'_> {
+    text(content).size(SUBHEADING_SIZE).color(MUTED)
 }
 
 pub fn clip_title<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {

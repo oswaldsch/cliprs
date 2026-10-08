@@ -2,7 +2,7 @@ use std::fmt;
 use std::io;
 
 use cliprs_ipc::{Capabilities, Settings};
-use iced::widget::{column, container, pick_list, row, text};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Element, Length};
 
 use crate::{Message, style};
@@ -142,6 +142,7 @@ pub struct Form {
     pub fps: Option<FPSOptions>,
     pub bitrate: Option<BitrateOptions>,
     pub duration: Option<DurationOptions>,
+    monitor: Option<String>,
     gop_frames: Option<u32>,
 }
 
@@ -152,6 +153,7 @@ impl Form {
             fps: FPSOptions::from_value(settings.fps),
             bitrate: BitrateOptions::from_bps(settings.average_bitrate_bps),
             duration: DurationOptions::from_seconds(settings.clip_seconds),
+            monitor: settings.monitor,
             gop_frames: Capabilities::load()
                 .ok()
                 .flatten()
@@ -171,6 +173,7 @@ impl Form {
             fps: self.fps?.value(),
             average_bitrate_bps: self.bitrate?.average_bps(),
             clip_seconds: self.duration?.seconds(),
+            monitor: self.monitor.clone(),
         })
     }
 
@@ -235,7 +238,7 @@ fn setting_row<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a,
         .into()
 }
 
-pub fn view(form: &Form) -> Element<'_, Message> {
+pub fn view(form: &Form, applying: bool) -> Element<'_, Message> {
     column![
         setting_row(
             "Recording FPS",
@@ -257,6 +260,15 @@ pub fn view(form: &Form) -> Element<'_, Message> {
     .extend(
         form.estimate_ram_mb()
             .map(|(typical, peak)| ram_infobox(typical, peak)),
+    )
+    .push(
+        container(
+            button("Apply")
+                .padding(style::BUTTON_PADDING)
+                .style(style::primary_button)
+                .on_press_maybe((!applying).then_some(Message::ApplySettings)),
+        )
+        .align_right(Length::Fill),
     )
     .spacing(style::SECTION_SPACING)
     .into()

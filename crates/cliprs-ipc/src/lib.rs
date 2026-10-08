@@ -1,9 +1,12 @@
+pub mod install;
+
 use std::env;
 use std::ffi::{CStr, OsStr};
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::mem::{self, MaybeUninit};
-use std::os::fd::AsRawFd;
+use std::ops::Range;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, chown, fchown};
 use std::os::unix::net::UnixDatagram;
@@ -11,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use drm::control::{Device as ControlDevice, connector};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +29,12 @@ const CAPABILITIES_FILE: &str = "capabilities.json";
 const OVERLAY_SOCKET_FILE: &str = "cliprs-overlay.sock";
 const DAEMON_LOCK_FILE: &str = "cliprs-daemon.lock";
 const OVERLAY_LOCK_FILE: &str = "cliprs-overlay.lock";
+const DRM_DEVICE_DIR: &str = "/dev/dri";
+const DRM_CARD_PREFIX: &str = "card";
+const EDID_PROPERTY: &[u8] = b"EDID";
+const EDID_DESCRIPTORS: Range<usize> = 54..126;
+const EDID_DESCRIPTOR_BYTES: usize = 18;
+const EDID_MONITOR_NAME_HEADER: [u8; 5] = [0, 0, 0, 0xFC, 0];
 const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
 const PEAK_TO_AVERAGE_BITRATE: u64 = 2;
 
@@ -33,6 +43,8 @@ pub struct Settings {
     pub fps: u32,
     pub average_bitrate_bps: u64,
     pub clip_seconds: u32,
+    #[serde(default)]
+    pub monitor: Option<String>,
 }
 
 impl Default for Settings {
@@ -41,6 +53,7 @@ impl Default for Settings {
             fps: 60,
             average_bitrate_bps: 30_000_000,
             clip_seconds: 30,
+            monitor: None,
         }
     }
 }
@@ -48,6 +61,10 @@ impl Default for Settings {
 impl Settings {
     pub fn peak_bitrate_bps(&self) -> u64 {
         self.average_bitrate_bps * PEAK_TO_AVERAGE_BITRATE
+    }
+
+    pub fn check_setup() -> io::Result<bool> {
+        settings_path()?.try_exists()
     }
 
     pub fn load() -> io::Result<Settings> {
@@ -105,6 +122,101 @@ pub fn thumbnail_path(id: &str) -> io::Result<PathBuf> {
         .join(APP_DIR)
         .join(THUMBNAILS_SUBDIR)
         .join(format!("{id}.jpg")))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Monitor {
+    pub id: String,
+    pub name: Option<String>,
+    pub resolution: (u32, u32),
+    pub refresh_hz: u32,
+}
+
+struct DrmCard(File);
+
+impl AsFd for DrmCard {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+impl drm::Device for DrmCard {}
+impl ControlDevice for DrmCard {}
+
+pub fn monitors() -> io::Result<Vec<Monitor>> {
+    let mut monitors = Vec::new();
+    for entry in fs::read_dir(DRM_DEVICE_DIR)? {
+        let path = entry?.path();
+        let is_card = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with(DRM_CARD_PREFIX));
+        if !is_card {
+            continue;
+        }
+        // Cards without display outputs reject the resource query, so one bad card must not hide the rest.
+        match card_monitors(&path) {
+            Ok(found) => monitors.extend(found),
+            Err(error) => log::warn!("skipped {}: {error}", path.display()),
+        }
+    }
+    monitors.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(monitors)
+}
+
+fn card_monitors(path: &Path) -> io::Result<Vec<Monitor>> {
+    let card = DrmCard(OpenOptions::new().read(true).write(true).open(path)?);
+    let mut monitors = Vec::new();
+    for &handle in card.resource_handles()?.connectors() {
+        let connector = card.get_connector(handle, false)?;
+        if connector.state() != connector::State::Connected {
+            continue;
+        }
+        let Some(encoder) = connector.current_encoder() else {
+            continue;
+        };
+        let Some(crtc) = card.get_encoder(encoder)?.crtc() else {
+            continue;
+        };
+        let Some(mode) = card.get_crtc(crtc)?.mode() else {
+            continue;
+        };
+        let (width, height) = mode.size();
+        monitors.push(Monitor {
+            id: format!(
+                "{}-{}",
+                connector.interface().as_str(),
+                connector.interface_id()
+            ),
+            name: edid(&card, handle)
+                .ok()
+                .flatten()
+                .and_then(|edid| parse_edid_monitor_name(&edid)),
+            resolution: (width.into(), height.into()),
+            refresh_hz: mode.vrefresh(),
+        });
+    }
+    Ok(monitors)
+}
+
+fn edid(card: &DrmCard, connector: connector::Handle) -> io::Result<Option<Vec<u8>>> {
+    for (&property, &blob) in card.get_properties(connector)?.iter() {
+        if card.get_property(property)?.name().to_bytes() == EDID_PROPERTY && blob != 0 {
+            return card.get_property_blob(blob).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn parse_edid_monitor_name(edid: &[u8]) -> Option<String> {
+    let text = edid
+        .get(EDID_DESCRIPTORS)?
+        .as_chunks::<EDID_DESCRIPTOR_BYTES>()
+        .0
+        .iter()
+        .find_map(|descriptor| descriptor.strip_prefix(&EDID_MONITOR_NAME_HEADER))?;
+    let text = String::from_utf8_lossy(text);
+    let name = text.split('\n').next()?.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,8 +317,8 @@ impl InstanceLock {
             .truncate(false)
             .custom_flags(libc::O_NOFOLLOW)
             .open(lock_path)?;
-        if let (Some(uid), Some(gid)) = (sudo_id("SUDO_UID"), sudo_id("SUDO_GID")) {
-            fchown(&file, Some(uid), Some(gid))?;
+        if let Some(user) = invoking_user()? {
+            fchown(&file, Some(user.uid), Some(user.gid))?;
         }
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &whole_file_write_lock()) } == -1 {
             let error = io::Error::last_os_error();
@@ -319,10 +431,10 @@ fn sysconf(name: libc::c_int) -> io::Result<u64> {
 
 // The daemon runs as root for DRM and evdev access, so files it creates would otherwise be root-owned.
 pub fn give_to_invoking_user(path: &Path) -> io::Result<()> {
-    let (Some(uid), Some(gid)) = (sudo_id("SUDO_UID"), sudo_id("SUDO_GID")) else {
+    let Some(user) = invoking_user()? else {
         return Ok(());
     };
-    chown(path, Some(uid), Some(gid))
+    chown(path, Some(user.uid), Some(user.gid))
 }
 
 pub fn create_user_dir(dir: &Path) -> io::Result<()> {
@@ -336,11 +448,26 @@ pub fn create_user_dir(dir: &Path) -> io::Result<()> {
     give_to_invoking_user(dir)
 }
 
-fn sudo_id(name: &str) -> Option<u32> {
+struct InvokingUser {
+    uid: u32,
+    name: String,
+    gid: u32,
+    home: PathBuf,
+}
+
+fn env_id(name: &str) -> Option<u32> {
     env::var(name).ok()?.parse().ok()
 }
 
-fn invoking_user_home(uid: u32) -> io::Result<PathBuf> {
+fn invoking_user() -> io::Result<Option<InvokingUser>> {
+    // The systemd unit has no sudo variables, so it names the user itself.
+    match env_id(install::SERVICE_UID_VARIABLE).or_else(|| env_id("SUDO_UID")) {
+        Some(uid) => user_entry(uid).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn user_entry(uid: u32) -> io::Result<InvokingUser> {
     let mut passwd = MaybeUninit::<libc::passwd>::uninit();
     let mut strings = [0 as libc::c_char; 4096];
     let mut entry = ptr::null_mut();
@@ -360,13 +487,19 @@ fn invoking_user_home(uid: u32) -> io::Result<PathBuf> {
         return Err(io::Error::other(format!("no passwd entry for uid {uid}")));
     }
     let home = unsafe { CStr::from_ptr((*entry).pw_dir) };
-    Ok(PathBuf::from(OsStr::from_bytes(home.to_bytes())))
+    let name = unsafe { CStr::from_ptr((*entry).pw_name) };
+    Ok(InvokingUser {
+        uid,
+        name: name.to_string_lossy().into_owned(),
+        gid: unsafe { (*entry).pw_gid },
+        home: PathBuf::from(OsStr::from_bytes(home.to_bytes())),
+    })
 }
 
 fn home_dir() -> io::Result<PathBuf> {
     // sudo resets HOME to /root, which would split the daemon's files from the GUI's.
-    if let Some(uid) = sudo_id("SUDO_UID") {
-        return invoking_user_home(uid);
+    if let Some(user) = invoking_user()? {
+        return Ok(user.home);
     }
     env::var_os("HOME")
         .map(PathBuf::from)
@@ -375,7 +508,7 @@ fn home_dir() -> io::Result<PathBuf> {
 
 fn xdg_base_dir(variable: &str, home_fallback: &str) -> io::Result<PathBuf> {
     // sudo drops the XDG variables, so under sudo only the default location is known.
-    if sudo_id("SUDO_UID").is_none()
+    if invoking_user()?.is_none()
         && let Some(dir) = env::var_os(variable)
         && !dir.is_empty()
     {
@@ -425,8 +558,8 @@ fn capabilities_path() -> io::Result<PathBuf> {
 
 fn runtime_dir() -> io::Result<PathBuf> {
     // sudo drops XDG_RUNTIME_DIR, and the overlay binds in the invoking user's runtime dir.
-    if let Some(uid) = sudo_id("SUDO_UID") {
-        return Ok(PathBuf::from(format!("/run/user/{uid}")));
+    if let Some(user) = invoking_user()? {
+        return Ok(PathBuf::from(format!("/run/user/{}", user.uid)));
     }
     match env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir)),
@@ -471,6 +604,7 @@ mod tests {
             fps: 144,
             average_bitrate_bps: 20_000_000,
             clip_seconds: 15,
+            monitor: Some("card1-DP-1".to_owned()),
         };
         write_json(&path, &settings).unwrap();
         assert_eq!(read_json::<Settings>(&path).unwrap(), Some(settings));
@@ -492,6 +626,19 @@ mod tests {
         );
         assert_eq!(parse("XDG_VIDEOS_DIR=\"media\""), None);
         assert_eq!(parse("XDG_MUSIC_DIR=\"$HOME/Musik\""), None);
+    }
+
+    #[test]
+    fn edid_monitor_name() {
+        let mut edid = vec![0xFF; 128];
+        assert_eq!(parse_edid_monitor_name(&edid), None);
+        assert_eq!(parse_edid_monitor_name(&edid[..100]), None);
+
+        edid[72..90].copy_from_slice(b"\0\0\0\xFC\0DELL U2720Q\n ");
+        assert_eq!(
+            parse_edid_monitor_name(&edid).as_deref(),
+            Some("DELL U2720Q")
+        );
     }
 
     #[test]
