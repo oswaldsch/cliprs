@@ -8,13 +8,12 @@ use iced::{
     widget::{button, column, container, row},
 };
 
-use crate::style::{
-    BUTTON_PADDING, CARD_TEXT_SPACING, MONITOR_CARD_WIDTH, MONITOR_ICON_SIZE, PAGE_PADDING,
-    SECTION_SPACING, accent_icon, card_button, card_button_selected, clip_details, clip_title,
-    heading, plain_icon, primary_button, secondary_button, subheading,
-};
+use crate::style::icon::{self, Tint, icon};
+use crate::style::text::{caption, heading, lead, title};
+use crate::style::{self, space};
 
 const PAGE_COUNT: u32 = 2;
+const MONITOR_CARD_WIDTH: f32 = 220.0;
 
 pub struct State {
     current_page: u32,
@@ -55,8 +54,8 @@ fn save_settings(state: &State) -> io::Result<()> {
 fn construct_button_row(state: &State) -> Element<'_, Message> {
     row![
         button("Back")
-            .padding(BUTTON_PADDING)
-            .style(secondary_button)
+            .padding(space::CONTROL)
+            .style(style::button::secondary)
             .width(Fill)
             .on_press_maybe(
                 (state.current_page > 0 && !state.installing).then_some(Message::PreviousPage)
@@ -66,40 +65,34 @@ fn construct_button_row(state: &State) -> Element<'_, Message> {
         } else {
             "Next"
         })
-        .padding(BUTTON_PADDING)
-        .style(primary_button)
+        .padding(space::CONTROL)
+        .style(style::button::primary)
         .width(Fill)
         .on_press_maybe((!state.installing).then_some(Message::NextPage))
     ]
-    .spacing(10)
+    .spacing(space::MD)
     .into()
 }
 
 fn construct_monitor_card<'a>(monitor: &'a Monitor, selected: bool) -> Element<'a, Message> {
-    let icon = if selected { accent_icon } else { plain_icon };
+    let tint = if selected { Tint::Accent } else { Tint::Text };
     let (width, height) = monitor.resolution;
     let mode = format!("{width}x{height} at {} Hz", monitor.refresh_hz);
     let connector = monitor.name.as_ref().map(|_| monitor.id.as_str());
     button(
         column![
-            icon(include_bytes!("../assets/monitor.svg"))
-                .width(MONITOR_ICON_SIZE)
-                .height(MONITOR_ICON_SIZE),
-            clip_title(monitor.name.as_deref().unwrap_or(&monitor.id)),
-            clip_details(mode),
+            icon(include_bytes!("../assets/monitor.svg"), icon::LG, tint),
+            title(monitor.name.as_deref().unwrap_or(&monitor.id)),
+            caption(mode),
         ]
-        .extend(connector.map(|connector| Element::from(clip_details(connector))))
-        .spacing(CARD_TEXT_SPACING)
+        .extend(connector.map(|connector| Element::from(caption(connector))))
+        .spacing(space::XS)
         .align_x(Center)
         .width(Fill),
     )
     .width(MONITOR_CARD_WIDTH)
-    .padding(PAGE_PADDING)
-    .style(if selected {
-        card_button_selected
-    } else {
-        card_button
-    })
+    .padding(space::LG)
+    .style(style::button::card(selected))
     .on_press(Message::MonitorSelected(monitor.clone()))
     .into()
 }
@@ -109,9 +102,7 @@ fn construct_monitor_cards(state: &State) -> Element<'_, Message> {
         let selected = state.selected_monitor.as_ref() == Some(monitor);
         construct_monitor_card(monitor, selected)
     });
-    container(row(cards).spacing(SECTION_SPACING))
-        .center(Fill)
-        .into()
+    container(row(cards).spacing(space::MD)).center(Fill).into()
 }
 
 pub fn boot() -> State {
@@ -171,11 +162,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .center(),
             construct_button_row(&state)
         ]
-        .padding(PAGE_PADDING)
+        .padding(space::LG)
         .into(),
         1 => column![
             heading("Monitors").width(Fill).center(),
-            subheading("First, lets pick your primary monitor")
+            lead("First, lets pick your primary monitor")
                 .width(Fill)
                 .center(),
             construct_monitor_cards(state),
@@ -184,10 +175,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
             state
                 .install_error
                 .as_deref()
-                .map(|error| subheading(error).width(Fill).center().into()),
+                .map(|error| lead(error).width(Fill).center().into()),
         )
         .push(construct_button_row(&state))
-        .padding(PAGE_PADDING)
+        .padding(space::LG)
         .into(),
         _ => column![heading("Page count invalid")].into(),
     }

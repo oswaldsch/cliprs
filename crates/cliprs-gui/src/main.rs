@@ -19,8 +19,12 @@ use library::Clip;
 use settings::{BitrateOptions, DurationOptions, FPSOptions};
 
 use crate::resources::construct_resource_tab;
+use crate::style::icon::{self, Tint, icon};
+use crate::style::space;
 
 const DEBUG_SETUP: bool = true;
+const SIDEBAR_WIDTH: f32 = 220.0;
+const CONTENT_MAX_WIDTH: f32 = 640.0;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -96,16 +100,18 @@ fn blocking_task(
 fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Message> {
     let selected: bool = state.selected_sidebar_tab == tab;
 
-    button(row![style::sidebar_icon(tab.icon_bytes(), selected), tab.name()].spacing(8))
-        .width(Length::Fill)
-        .on_press(Message::Navigate(tab))
-        .padding(style::BUTTON_PADDING)
-        .style(if selected {
-            style::sidebar_button_selected
-        } else {
-            style::sidebar_button
-        })
-        .into()
+    button(
+        row![
+            icon(tab.icon_bytes(), icon::MD, Tint::Nav { selected }),
+            tab.name()
+        ]
+        .spacing(space::SM),
+    )
+    .width(Length::Fill)
+    .on_press(Message::Navigate(tab))
+    .padding(space::CONTROL)
+    .style(style::button::nav(selected))
+    .into()
 }
 
 fn construct_main_view(state: &State) -> Element<'_, Message> {
@@ -116,11 +122,11 @@ fn construct_main_view(state: &State) -> Element<'_, Message> {
     };
 
     container(
-        column![style::heading(tab.name()), page]
-            .spacing(style::SECTION_SPACING)
-            .max_width(style::CONTENT_MAX_WIDTH),
+        column![style::text::heading(tab.name()), page]
+            .spacing(space::MD)
+            .max_width(CONTENT_MAX_WIDTH),
     )
-    .padding(style::PAGE_PADDING)
+    .padding(space::LG)
     .center_x(Length::Fill)
     .into()
 }
@@ -132,16 +138,16 @@ fn view(state: &State) -> Element<'_, Message> {
                 .iter()
                 .map(|tab| construct_sidebar_button(*tab, state)),
         )
-        .spacing(style::SIDEBAR_SPACING),
+        .spacing(space::XS),
         vertical(),
     ];
     if let Some(sample) = &state.resource_sample {
         sidebar = sidebar.push(construct_resource_tab(sample, state.cpu_percent));
     }
     let sidebar_container = container(sidebar)
-        .padding(style::SIDEBAR_PADDING)
-        .style(style::sidebar)
-        .width(style::SIDEBAR_WIDTH)
+        .padding(space::MD)
+        .style(style::surface::panel)
+        .width(SIDEBAR_WIDTH)
         .height(Length::Fill);
 
     let main_view = construct_main_view(state);

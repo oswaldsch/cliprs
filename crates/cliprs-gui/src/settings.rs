@@ -5,7 +5,11 @@ use cliprs_ipc::{Capabilities, Settings};
 use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Element, Length};
 
-use crate::{Message, style};
+use crate::Message;
+use crate::style::icon::{self, Tint, icon};
+use crate::style::{self, space};
+
+const CONTROL_WIDTH: f32 = 260.0;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub enum BitrateOptions {
@@ -198,42 +202,39 @@ where
     T: ToString + PartialEq + Clone + 'a,
 {
     pick_list(options, selected, on_selected)
-        .style(style::dropdown)
-        .menu_style(style::dropdown_menu)
-        .width(style::CONTROL_WIDTH)
-        .padding(style::PICK_LIST_PADDING)
+        .style(style::control::dropdown)
+        .menu_style(style::control::dropdown_menu)
+        .width(CONTROL_WIDTH)
+        .padding(space::CONTROL)
         .into()
 }
 
 fn ram_infobox<'a>(typical: u64, peak: u64) -> Element<'a, Message> {
     let figures = column![
-        text(format!(
+        style::text::title(format!(
             "Your configuration will use about {typical} MB RAM"
-        ))
-        .font(style::BOLD),
-        text(format!("Up to {peak} MB in very busy scenes"))
-            .size(style::LABEL_SIZE)
-            .color(style::MUTED),
+        )),
+        style::text::label(format!("Up to {peak} MB in very busy scenes")),
     ]
-    .spacing(4);
+    .spacing(space::XS);
 
     container(
         row![
-            style::accent_icon(include_bytes!("../assets/info.svg")),
+            icon(include_bytes!("../assets/info.svg"), icon::MD, Tint::Accent),
             figures
         ]
-        .spacing(style::SECTION_SPACING)
+        .spacing(space::MD)
         .align_y(Alignment::Start),
     )
-    .style(style::card)
-    .padding(14)
+    .style(style::surface::card)
+    .padding(space::MD)
     .width(Length::Fill)
     .into()
 }
 
 fn setting_row<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
     row![text(label).width(Length::Fill), control]
-        .spacing(style::SECTION_SPACING)
+        .spacing(space::MD)
         .align_y(Alignment::Center)
         .into()
 }
@@ -264,12 +265,12 @@ pub fn view(form: &Form, applying: bool) -> Element<'_, Message> {
     .push(
         container(
             button("Apply")
-                .padding(style::BUTTON_PADDING)
-                .style(style::primary_button)
+                .padding(space::CONTROL)
+                .style(style::button::primary)
                 .on_press_maybe((!applying).then_some(Message::ApplySettings)),
         )
         .align_right(Length::Fill),
     )
-    .spacing(style::SECTION_SPACING)
+    .spacing(space::MD)
     .into()
 }

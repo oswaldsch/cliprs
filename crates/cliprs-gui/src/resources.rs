@@ -6,7 +6,8 @@ use iced::widget::{column, container, progress_bar, row};
 use iced::{Alignment, Element};
 
 use crate::Message;
-use crate::style;
+use crate::style::icon::{self, Tint, icon};
+use crate::style::{self, space};
 
 const BYTES_PER_MIB: f64 = 1024.0 * 1024.0;
 const MIB_PER_GIB: f64 = 1024.0;
@@ -37,9 +38,9 @@ pub fn construct_resource_tab(
         ram_percent,
     );
 
-    container(column![cpu, ram].spacing(style::STAT_SPACING))
-        .padding(style::STAT_CARD_PADDING)
-        .style(style::card)
+    container(column![cpu, ram].spacing(space::MD))
+        .padding(space::MD)
+        .style(style::surface::card)
         .into()
 }
 
@@ -51,18 +52,18 @@ fn construct_stat(
 ) -> Element<'static, Message> {
     column![
         row![
-            style::stat_icon(icon_bytes),
-            style::stat_label(label),
+            icon(icon_bytes, icon::SM, Tint::Muted),
+            style::text::label(label),
             horizontal(),
-            style::stat_value(value),
+            style::text::value(value),
         ]
-        .spacing(style::STAT_ICON_SPACING)
+        .spacing(space::SM)
         .align_y(Alignment::Center),
         progress_bar(0.0..=100.0, percent.unwrap_or(0.0))
-            .girth(style::USAGE_BAR_GIRTH)
-            .style(style::usage_bar),
+            .girth(style::METER_GIRTH)
+            .style(style::control::meter),
     ]
-    .spacing(style::STAT_BAR_SPACING)
+    .spacing(space::XS)
     .into()
 }
 

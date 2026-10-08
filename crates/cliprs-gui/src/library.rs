@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Datelike, Local};
 use cliprs_ipc::{ClipMeta, clips_dir, thumbnail_path};
-use iced::widget::{column, container, grid, image, mouse_area, row, scrollable, stack, text};
+use iced::widget::{column, container, grid, image, mouse_area, row, scrollable, stack};
 use iced::{Alignment, ContentFit, Element, Length};
 use webm_iterable::WebmIterator;
 use webm_iterable::matroska_spec::{Master, MatroskaSpec};
 
-use crate::{Message, style};
+use crate::Message;
+use crate::style::{self, radius, space};
 
 pub struct Clip {
     video_path: PathBuf,
@@ -121,21 +122,21 @@ fn clip_thumbnail(clip: &Clip) -> Element<'_, Message> {
     let thumbnail = image::Image::new(image::Handle::from_path(&clip.thumbnail_path))
         .width(Length::Fill)
         .content_fit(ContentFit::Contain)
-        .border_radius(style::RADIUS);
+        .border_radius(radius::MD);
     let Some(duration_secs) = clip.duration_secs else {
         return thumbnail.into();
     };
 
-    let badge = container(text(format_duration(duration_secs)).size(style::DURATION_SIZE))
-        .padding(style::DURATION_PADDING)
-        .style(style::duration_badge);
+    let badge = container(style::text::badge(format_duration(duration_secs)))
+        .padding(space::BADGE)
+        .style(style::surface::badge);
 
     stack![
         thumbnail,
         container(badge)
             .align_right(Length::Fill)
             .align_bottom(Length::Fill)
-            .padding(style::DURATION_MARGIN)
+            .padding(space::SM)
     ]
     .into()
 }
@@ -146,17 +147,17 @@ fn clip_card(clip: &Clip) -> Element<'_, Message> {
     mouse_area(
         column![
             clip_thumbnail(clip),
-            row![style::clip_title(clip.title.as_str()).width(Length::Fill)]
-                .extend(saved_at.map(|saved_at| Element::from(style::clip_details(saved_at))))
-                .spacing(style::CARD_TEXT_SPACING * 2.0)
+            row![style::text::title(clip.title.as_str()).width(Length::Fill)]
+                .extend(saved_at.map(|saved_at| Element::from(style::text::caption(saved_at))))
+                .spacing(space::SM)
                 .align_y(Alignment::Center),
         ]
         .extend(
             clip.details
                 .as_deref()
-                .map(|details| Element::from(style::clip_details(details))),
+                .map(|details| Element::from(style::text::caption(details))),
         )
-        .spacing(style::CARD_TEXT_SPACING),
+        .spacing(space::XS),
     )
     .on_press(Message::ClipClicked(clip.video_path.clone()))
     .into()
@@ -165,19 +166,14 @@ fn clip_card(clip: &Clip) -> Element<'_, Message> {
 fn empty_state<'a>() -> Element<'a, Message> {
     container(
         column![
-            text("No clips yet")
-                .size(style::EMPTY_TITLE_SIZE)
-                .color(style::TEXT)
-                .font(style::SEMIBOLD),
-            text("Come back here once you recorded a clip")
-                .size(style::LABEL_SIZE)
-                .color(style::MUTED),
+            style::text::title("No clips yet"),
+            style::text::label("Come back here once you recorded a clip"),
         ]
-        .spacing(style::CARD_TEXT_SPACING)
+        .spacing(space::XS)
         .align_x(Alignment::Center),
     )
     .center_x(Length::Fill)
-    .padding(style::EMPTY_STATE_PADDING)
+    .padding(space::XL)
     .into()
 }
 
@@ -185,8 +181,8 @@ pub fn view(clips: &[Clip]) -> Element<'_, Message> {
     if clips.is_empty() {
         empty_state()
     } else {
-        scrollable(grid(clips.iter().map(clip_card)).spacing(10))
-            .spacing(10)
+        scrollable(grid(clips.iter().map(clip_card)).spacing(space::MD))
+            .spacing(space::MD)
             .into()
     }
 }
