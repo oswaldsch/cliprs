@@ -14,7 +14,6 @@ To capture the KMS framebuffer, the daemon has to run as root. It only communica
 - Some monitor color formats still fail to parse, but the common ones should work
 - A resolution change mid-clip currently crashes the daemon, as it expects the format of data to stay consistent
 - Audio is not yet supported
-- GPU device enumeration is not yet added, so the DRM device ID is hardcoded to /dev/dri/card2
 
 ## License
 This project is licensed under GPLv3.

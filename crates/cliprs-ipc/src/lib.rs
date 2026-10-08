@@ -142,17 +142,33 @@ impl AsFd for DrmCard {
 impl drm::Device for DrmCard {}
 impl ControlDevice for DrmCard {}
 
-pub fn monitors() -> io::Result<Vec<Monitor>> {
-    let mut monitors = Vec::new();
+pub fn drm_card_paths() -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
     for entry in fs::read_dir(DRM_DEVICE_DIR)? {
         let path = entry?.path();
         let is_card = path
             .file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name.starts_with(DRM_CARD_PREFIX));
-        if !is_card {
-            continue;
+        if is_card {
+            paths.push(path);
         }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+pub fn connector_id(connector: &connector::Info) -> String {
+    format!(
+        "{}-{}",
+        connector.interface().as_str(),
+        connector.interface_id()
+    )
+}
+
+pub fn monitors() -> io::Result<Vec<Monitor>> {
+    let mut monitors = Vec::new();
+    for path in drm_card_paths()? {
         // Cards without display outputs reject the resource query, so one bad card must not hide the rest.
         match card_monitors(&path) {
             Ok(found) => monitors.extend(found),
@@ -182,11 +198,7 @@ fn card_monitors(path: &Path) -> io::Result<Vec<Monitor>> {
         };
         let (width, height) = mode.size();
         monitors.push(Monitor {
-            id: format!(
-                "{}-{}",
-                connector.interface().as_str(),
-                connector.interface_id()
-            ),
+            id: connector_id(&connector),
             name: edid(&card, handle)
                 .ok()
                 .flatten()

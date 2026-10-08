@@ -1,14 +1,16 @@
-use drm::control::{Device as ControlDevice, plane};
+use drm::control::{Device as ControlDevice, connector, crtc, plane};
 use drm::{ClientCapability, Device};
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::path::Path;
 
 const PLANE_TYPE_PRIMARY: u64 = 1;
 
 pub struct Card {
     file: File,
     primary_planes: Vec<plane::Handle>,
+    connector: Option<connector::Handle>,
 }
 
 impl AsFd for Card {
@@ -28,12 +30,50 @@ pub struct Frame {
     pub planes: Vec<(u32, u32)>,
 }
 
+pub fn open_monitor(wanted: Option<&str>) -> Result<Card, Box<dyn Error>> {
+    let mut fallback = None;
+    for path in cliprs_ipc::drm_card_paths()? {
+        let card = match Card::probe(&path, wanted) {
+            Ok(card) => card,
+            Err(error) => {
+                log::warn!("skipped {}: {error}", path.display());
+                continue;
+            }
+        };
+        if card.connector.is_some() {
+            log::info!(
+                "recording {} on {}",
+                wanted.unwrap_or_default(),
+                path.display()
+            );
+            return Ok(card);
+        }
+        if fallback.is_none() && !card.active_primary_planes()?.is_empty() {
+            log::info!("recording the first active output on {}", path.display());
+            fallback = Some(card);
+        }
+    }
+    if let Some(wanted) = wanted {
+        log::warn!("monitor {wanted} is not connected, recording another output");
+    }
+    fallback.ok_or_else(|| "no card with an active output".into())
+}
+
 impl Card {
-    pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
+    fn probe(path: &Path, wanted: Option<&str>) -> Result<Self, Box<dyn Error>> {
+        let mut card = Card::open(path)?;
+        if let Some(wanted) = wanted {
+            card.connector = card.connected_connector(wanted)?;
+        }
+        Ok(card)
+    }
+
+    fn open(path: &Path) -> Result<Self, Box<dyn Error>> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut card = Card {
             file,
             primary_planes: Vec::new(),
+            connector: None,
         };
         card.set_client_capability(ClientCapability::UniversalPlanes, true)?;
         for p in card.plane_handles()? {
@@ -53,10 +93,41 @@ impl Card {
         Ok(false)
     }
 
+    fn connected_connector(&self, id: &str) -> Result<Option<connector::Handle>, Box<dyn Error>> {
+        for &handle in self.resource_handles()?.connectors() {
+            let connector = self.get_connector(handle, false)?;
+            if connector.state() == connector::State::Connected
+                && cliprs_ipc::connector_id(&connector) == id
+            {
+                return Ok(Some(handle));
+            }
+        }
+        Ok(None)
+    }
+
+    fn connector_crtc(
+        &self,
+        connector: connector::Handle,
+    ) -> Result<Option<crtc::Handle>, Box<dyn Error>> {
+        let Some(encoder) = self.get_connector(connector, false)?.current_encoder() else {
+            return Ok(None);
+        };
+        Ok(self.get_encoder(encoder)?.crtc())
+    }
+
     pub fn active_primary_planes(&self) -> Result<Vec<plane::Handle>, Box<dyn Error>> {
+        let wanted_crtc = match self.connector {
+            Some(connector) => match self.connector_crtc(connector)? {
+                Some(crtc) => Some(crtc),
+                None => return Ok(Vec::new()),
+            },
+            None => None,
+        };
         let mut out = Vec::new();
         for &p in &self.primary_planes {
-            if self.get_plane(p)?.framebuffer().is_some() {
+            let plane = self.get_plane(p)?;
+            let on_wanted_crtc = wanted_crtc.is_none() || plane.crtc() == wanted_crtc;
+            if plane.framebuffer().is_some() && on_wanted_crtc {
                 out.push(p);
             }
         }

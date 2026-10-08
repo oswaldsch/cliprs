@@ -72,7 +72,8 @@ fn recording_loop(
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let card = kms::Card::open("/dev/dri/card2")?; // TODO: add DRM enumeration
+    let settings = Settings::load()?;
+    let card = kms::open_monitor(settings.monitor.as_deref())?;
     let vk = vulkan::VulkanDevice::new()?;
 
     if SINGLE_FRAME_DEBUG {
@@ -91,7 +92,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         gop_frames: encode::GOP_LENGTH,
     }
     .save()?;
-    let settings = Settings::load()?;
 
     recording_loop(&card, &vk, settings)
 }
