@@ -1,16 +1,21 @@
 mod library;
+mod resources;
 mod settings;
 mod style;
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
-use cliprs_ipc::notify_error;
+use cliprs_ipc::{Process, ResourceSample, notify_error};
+use iced::widget::space::vertical;
 use iced::widget::{button, column, container, row};
-use iced::{Element, Length, Theme};
+use iced::{Element, Length, Subscription, Theme};
 
 use library::Clip;
 use settings::{BitrateOptions, DurationOptions, FPSOptions};
+
+use crate::resources::construct_resource_tab;
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -19,6 +24,7 @@ enum Message {
     BitrateChanged(BitrateOptions),
     DurationChanged(DurationOptions),
     ClipClicked(PathBuf),
+    ResourceTick,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
@@ -49,6 +55,8 @@ struct State {
     selected_sidebar_tab: SidebarTab,
     settings: settings::Form,
     clips: Vec<Clip>,
+    resource_sample: Option<ResourceSample>,
+    cpu_percent: Option<f32>,
 }
 
 impl State {
@@ -57,6 +65,8 @@ impl State {
             selected_sidebar_tab: SidebarTab::default(),
             settings: settings::Form::load(),
             clips: library::load_clips(),
+            resource_sample: None,
+            cpu_percent: None,
         }
     }
 
@@ -101,22 +111,27 @@ fn construct_main_view(state: &State) -> Element<'_, Message> {
 }
 
 fn view(state: &State) -> Element<'_, Message> {
-    let sidebar = container(
+    let mut sidebar = column![
         column(
             SidebarTab::ALL
                 .iter()
                 .map(|tab| construct_sidebar_button(*tab, state)),
         )
         .spacing(style::SIDEBAR_SPACING),
-    )
-    .padding(style::SIDEBAR_PADDING)
-    .style(style::sidebar)
-    .width(style::SIDEBAR_WIDTH)
-    .height(Length::Fill);
+        vertical(),
+    ];
+    if let Some(sample) = &state.resource_sample {
+        sidebar = sidebar.push(construct_resource_tab(sample, state.cpu_percent));
+    }
+    let sidebar_container = container(sidebar)
+        .padding(style::SIDEBAR_PADDING)
+        .style(style::sidebar)
+        .width(style::SIDEBAR_WIDTH)
+        .height(Length::Fill);
 
     let main_view = construct_main_view(state);
 
-    container(row![sidebar, main_view]).into()
+    container(row![sidebar_container, main_view]).into()
 }
 
 fn update(state: &mut State, message: Message) {
@@ -149,7 +164,25 @@ fn update(state: &mut State, message: Message) {
                 notify_error(format!("Failed to open file: {error}"));
             }
         }
+        Message::ResourceTick => match Process::Daemon.sample_resources() {
+            Ok(sample) => {
+                state.cpu_percent = sample
+                    .zip(state.resource_sample)
+                    .and_then(|(now, previous)| now.cpu_percent_since(&previous))
+                    .map(|percent_of_one_core| percent_of_one_core / core_count());
+                state.resource_sample = sample;
+            }
+            Err(error) => log::warn!("failed to sample daemon resources: {error}"),
+        },
     }
+}
+
+fn core_count() -> f32 {
+    std::thread::available_parallelism().map_or(1.0, |cores| cores.get() as f32)
+}
+
+fn subscription(_state: &State) -> Subscription<Message> {
+    iced::time::every(Duration::from_secs(1)).map(|_| Message::ResourceTick)
 }
 
 fn theme(_state: &State) -> Theme {
@@ -163,5 +196,6 @@ fn main() -> iced::Result {
     .init();
     iced::application(State::load, update, view)
         .theme(theme)
+        .subscription(subscription)
         .run()
 }

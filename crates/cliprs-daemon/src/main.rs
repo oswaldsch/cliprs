@@ -13,8 +13,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cliprs_ipc::{
-    Capabilities, Notification, Settings, create_user_dir, give_to_invoking_user, notify,
-    notify_error,
+    Capabilities, InstanceLock, Notification, Process, Settings, create_user_dir,
+    give_to_invoking_user, notify, notify_error,
 };
 use evdev::KeyCode;
 
@@ -97,6 +97,14 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    let _instance_lock = match InstanceLock::acquire(Process::Daemon) {
+        Ok(lock) => lock,
+        Err(error) => {
+            log::error!("could not take daemon lock: {error}");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(error) = run() {
         log::error!("daemon stopped: {error}");

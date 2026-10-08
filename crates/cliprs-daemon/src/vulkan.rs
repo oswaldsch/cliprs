@@ -2,7 +2,6 @@ use ash::vk::TaggedStructure;
 use ash::{Device, Entry, Instance, vk};
 use drm_fourcc::DrmFourcc;
 use std::error::Error;
-use std::ffi::c_char;
 use std::os::fd::{AsRawFd, IntoRawFd};
 
 pub fn vk_format(fourcc: DrmFourcc) -> Option<vk::Format> {
@@ -171,15 +170,7 @@ fn create_instance(entry: &Entry) -> Result<Instance, Box<dyn Error>> {
         .application_name(c"cliprs")
         .api_version(vk::API_VERSION_1_3);
 
-    let layers: Vec<*const c_char> = if cfg!(debug_assertions) {
-        vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
-    } else {
-        vec![]
-    };
-
-    let create_info = vk::InstanceCreateInfo::default()
-        .application_info(&app_info)
-        .enabled_layer_names(&layers);
+    let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
 
     Ok(unsafe { entry.create_instance(&create_info, None)? })
 }

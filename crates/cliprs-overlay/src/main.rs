@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-use cliprs_ipc::{Notification, NotificationReceiver};
+use cliprs_ipc::{InstanceLock, Notification, NotificationReceiver, Process};
 use iced::futures::Stream;
 use iced::futures::channel::oneshot;
 use iced::widget::{column, container, row, space};
@@ -39,6 +39,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         env_logger::Env::default().default_filter_or("warn,cliprs_overlay=info,cliprs_ipc=info"),
     )
     .init();
+    // Taken before bind, which would otherwise unlink a running overlay's socket.
+    let _instance_lock = InstanceLock::acquire(Process::Overlay)
+        .map_err(|error| format!("could not take overlay lock: {error}"))?;
     let receiver = NotificationReceiver::bind()
         .map_err(|error| format!("could not bind overlay socket: {error}"))?;
     if !wayland::layer_shell_available() {

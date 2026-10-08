@@ -2,7 +2,7 @@ use iced::border::Radius;
 use iced::font::Weight;
 use iced::widget::svg::{self, Handle, Svg};
 use iced::widget::{
-    Text, TextInput, button, container, overlay::menu, pick_list, text, text_input,
+    Text, TextInput, button, container, overlay::menu, pick_list, progress_bar, text, text_input,
 };
 use iced::{Background, Border, Color, Font, Shadow, Theme, color};
 
@@ -40,6 +40,13 @@ pub const DURATION_SIZE: f32 = 12.0;
 pub const DURATION_PADDING: [f32; 2] = [2.0, 6.0];
 pub const DURATION_MARGIN: f32 = 8.0;
 const DURATION_RADIUS: f32 = 4.0;
+const STAT_SIZE: f32 = 13.0;
+const STAT_ICON_SIZE: f32 = 16.0;
+pub const STAT_ICON_SPACING: f32 = 8.0;
+pub const STAT_SPACING: f32 = 10.0;
+pub const STAT_BAR_SPACING: f32 = 6.0;
+pub const STAT_CARD_PADDING: f32 = 12.0;
+pub const USAGE_BAR_GIRTH: f32 = 4.0;
 
 pub const BOLD: Font = Font {
     weight: Weight::Bold,
@@ -211,6 +218,29 @@ pub fn accent_icon(bytes: &'static [u8]) -> Svg<'static> {
     icon(bytes).style(|_theme, _status| svg::Style {
         color: Some(ACCENT),
     })
+}
+
+pub fn stat_icon(bytes: &'static [u8]) -> Svg<'static> {
+    icon(bytes)
+        .width(STAT_ICON_SIZE)
+        .height(STAT_ICON_SIZE)
+        .style(|_theme, _status| svg::Style { color: Some(MUTED) })
+}
+
+pub fn stat_label<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
+    text(content).size(STAT_SIZE).color(MUTED)
+}
+
+pub fn stat_value<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
+    text(content).size(STAT_SIZE).color(TEXT).font(Font::MONOSPACE)
+}
+
+pub fn usage_bar(_theme: &Theme) -> progress_bar::Style {
+    progress_bar::Style {
+        background: Background::Color(OUTLINE),
+        bar: Background::Color(ACCENT),
+        border: Border::default().rounded(USAGE_BAR_GIRTH / 2.0),
+    }
 }
 
 pub fn heading(content: &str) -> Text<'_> {

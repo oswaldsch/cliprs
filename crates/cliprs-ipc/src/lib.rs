@@ -1,13 +1,15 @@
 use std::env;
 use std::ffi::{CStr, OsStr};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::chown;
+use std::os::unix::fs::{OpenOptionsExt, chown, fchown};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,8 @@ const DEFAULT_VIDEOS_SUBDIR: &str = "Videos";
 const SETTINGS_FILE: &str = "settings.json";
 const CAPABILITIES_FILE: &str = "capabilities.json";
 const OVERLAY_SOCKET_FILE: &str = "cliprs-overlay.sock";
+const DAEMON_LOCK_FILE: &str = "cliprs-daemon.lock";
+const OVERLAY_LOCK_FILE: &str = "cliprs-overlay.lock";
 const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
 const PEAK_TO_AVERAGE_BITRATE: u64 = 2;
 
@@ -154,6 +158,162 @@ impl NotificationReceiver {
         let mut buffer = vec![0; MAX_NOTIFICATION_BYTES];
         let length = self.socket.recv(&mut buffer)?;
         Ok(serde_json::from_slice(&buffer[..length])?)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Process {
+    Daemon,
+    Overlay,
+}
+
+impl Process {
+    pub fn running_pid(self) -> io::Result<Option<u32>> {
+        lock_holder_pid(&self.lock_path()?)
+    }
+
+    pub fn sample_resources(self) -> io::Result<Option<ResourceSample>> {
+        match self.running_pid()? {
+            Some(pid) => ResourceSample::take(pid),
+            None => Ok(None),
+        }
+    }
+
+    fn lock_path(self) -> io::Result<PathBuf> {
+        let file = match self {
+            Process::Daemon => DAEMON_LOCK_FILE,
+            Process::Overlay => OVERLAY_LOCK_FILE,
+        };
+        Ok(runtime_dir()?.join(file))
+    }
+}
+
+pub struct InstanceLock {
+    _file: File,
+}
+
+impl InstanceLock {
+    pub fn acquire(process: Process) -> io::Result<Self> {
+        Self::acquire_at(&process.lock_path()?)
+    }
+
+    fn acquire_at(lock_path: &Path) -> io::Result<Self> {
+        // The daemon opens this as root in a user-writable dir, where a planted symlink would redirect the fchown.
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(lock_path)?;
+        if let (Some(uid), Some(gid)) = (sudo_id("SUDO_UID"), sudo_id("SUDO_GID")) {
+            fchown(&file, Some(uid), Some(gid))?;
+        }
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &whole_file_write_lock()) } == -1 {
+            let error = io::Error::last_os_error();
+            return Err(match error.raw_os_error() {
+                Some(libc::EAGAIN | libc::EACCES) => io::Error::other("already running"),
+                _ => error,
+            });
+        }
+        Ok(InstanceLock { _file: file })
+    }
+}
+
+fn whole_file_write_lock() -> libc::flock {
+    let mut lock: libc::flock = unsafe { mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as libc::c_short;
+    lock.l_whence = libc::SEEK_SET as libc::c_short;
+    lock
+}
+
+fn lock_holder_pid(lock_path: &Path) -> io::Result<Option<u32>> {
+    let file = match File::open(lock_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut lock = whole_file_write_lock();
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut lock) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((lock.l_type != libc::F_UNLCK as libc::c_short).then_some(lock.l_pid as u32))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResourceSample {
+    pub pid: u32,
+    pub cpu_time: Duration,
+    pub resident_bytes: u64,
+    taken_at: Instant,
+}
+
+impl ResourceSample {
+    fn take(pid: u32) -> io::Result<Option<ResourceSample>> {
+        let taken_at = Instant::now();
+        let (Some(stat), Some(statm)) =
+            (read_proc_file(pid, "stat")?, read_proc_file(pid, "statm")?)
+        else {
+            return Ok(None);
+        };
+        let cpu_ticks = parse_cpu_ticks(&stat)
+            .ok_or_else(|| io::Error::other(format!("unexpected /proc/{pid}/stat: {stat}")))?;
+        let resident_pages = parse_resident_pages(&statm)
+            .ok_or_else(|| io::Error::other(format!("unexpected /proc/{pid}/statm: {statm}")))?;
+        Ok(Some(ResourceSample {
+            pid,
+            cpu_time: Duration::from_secs_f64(
+                cpu_ticks as f64 / sysconf(libc::_SC_CLK_TCK)? as f64,
+            ),
+            resident_bytes: resident_pages * sysconf(libc::_SC_PAGESIZE)?,
+            taken_at,
+        }))
+    }
+
+    // 100 is one fully used core, so a multithreaded process can exceed it.
+    pub fn cpu_percent_since(&self, previous: &ResourceSample) -> Option<f32> {
+        if self.pid != previous.pid {
+            return None;
+        }
+        let elapsed = self.taken_at.checked_duration_since(previous.taken_at)?;
+        let used = self.cpu_time.checked_sub(previous.cpu_time)?;
+        (!elapsed.is_zero()).then(|| 100.0 * used.as_secs_f32() / elapsed.as_secs_f32())
+    }
+}
+
+fn read_proc_file(pid: u32, name: &str) -> io::Result<Option<String>> {
+    match fs::read_to_string(format!("/proc/{pid}/{name}")) {
+        Ok(contents) => Ok(Some(contents)),
+        // A process that exits between open and read fails the read with ESRCH.
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ESRCH) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn parse_cpu_ticks(stat: &str) -> Option<u64> {
+    // The comm field may itself contain spaces and parentheses, so fields are counted after its closing one.
+    let mut fields = stat.rsplit_once(')')?.1.split_ascii_whitespace().skip(11);
+    let user_ticks: u64 = fields.next()?.parse().ok()?;
+    let system_ticks: u64 = fields.next()?.parse().ok()?;
+    Some(user_ticks + system_ticks)
+}
+
+fn parse_resident_pages(statm: &str) -> Option<u64> {
+    statm.split_ascii_whitespace().nth(1)?.parse().ok()
+}
+
+pub fn total_memory_bytes() -> io::Result<u64> {
+    Ok(sysconf(libc::_SC_PHYS_PAGES)? * sysconf(libc::_SC_PAGESIZE)?)
+}
+
+fn sysconf(name: libc::c_int) -> io::Result<u64> {
+    match unsafe { libc::sysconf(name) } {
+        value if value > 0 => Ok(value as u64),
+        _ => Err(io::Error::last_os_error()),
     }
 }
 
@@ -350,5 +510,63 @@ mod tests {
         assert_eq!(receiver.receive().unwrap(), error);
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn instance_lock_reports_holder_until_it_exits() {
+        let dir = env::temp_dir().join(format!("cliprs-ipc-lock-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join(DAEMON_LOCK_FILE);
+        assert_eq!(lock_holder_pid(&lock_path).unwrap(), None);
+
+        let mut locked = [0; 2];
+        assert_eq!(unsafe { libc::pipe(locked.as_mut_ptr()) }, 0);
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            let lock = InstanceLock::acquire_at(&lock_path);
+            unsafe {
+                libc::write(locked[1], [lock.is_ok() as u8].as_ptr().cast(), 1);
+                libc::pause();
+                libc::_exit(0);
+            }
+        }
+        let mut acquired = [0u8];
+        assert_eq!(
+            unsafe { libc::read(locked[0], acquired.as_mut_ptr().cast(), 1) },
+            1
+        );
+        assert_eq!(acquired, [1]);
+
+        assert_eq!(lock_holder_pid(&lock_path).unwrap(), Some(child as u32));
+        assert!(InstanceLock::acquire_at(&lock_path).is_err());
+
+        unsafe {
+            libc::kill(child, libc::SIGKILL);
+            libc::waitpid(child, ptr::null_mut(), 0);
+        }
+        assert_eq!(lock_holder_pid(&lock_path).unwrap(), None);
+        drop(InstanceLock::acquire_at(&lock_path).unwrap());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resource_sample_parsing_and_own_process() {
+        let stat = "4242 (a) weird (name) S 1 4242 4242 0 -1 4194560 900 0 3 0 250 50 0 0 20 0 9 0 81234 1 2";
+        assert_eq!(parse_cpu_ticks(stat), Some(300));
+        assert_eq!(parse_cpu_ticks("4242 (truncated) S 1"), None);
+        assert_eq!(parse_resident_pages("5000 1200 300 10 0 900 0"), Some(1200));
+
+        let earlier = ResourceSample::take(std::process::id()).unwrap().unwrap();
+        assert!(earlier.resident_bytes > 0);
+        let mut later = earlier;
+        later.cpu_time += Duration::from_millis(500);
+        later.taken_at += Duration::from_secs(1);
+        assert_eq!(later.cpu_percent_since(&earlier), Some(50.0));
+        assert_eq!(earlier.cpu_percent_since(&later), None);
+        later.pid += 1;
+        assert_eq!(later.cpu_percent_since(&earlier), None);
+
+        assert_eq!(ResourceSample::take(u32::MAX).unwrap(), None);
     }
 }
