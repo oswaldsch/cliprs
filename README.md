@@ -12,7 +12,6 @@ To capture the KMS framebuffer, the daemon has to run as root. It only communica
 
 ## Limitations
 - Some monitor color formats still fail to parse, but the common ones should work
-- A resolution change mid-clip currently crashes the daemon, as it expects the format of data to stay consistent
 - Audio is not yet supported
 
 ## License

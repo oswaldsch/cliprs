@@ -13,8 +13,7 @@ use crate::vulkan::{VulkanDevice, vk_format};
 pub struct Recording<'a> {
     vk: &'a VulkanDevice,
     settings: Settings,
-    width: Option<u32>,
-    height: Option<u32>,
+    size: Option<(u32, u32)>,
     encoder: Option<Encoder<'a>>,
     samples: VecDeque<Sample>,
     max_frames: usize,
@@ -26,8 +25,7 @@ impl<'a> Recording<'a> {
         Ok(Recording {
             vk,
             settings,
-            width: None,
-            height: None,
+            size: None,
             encoder: None,
             samples: VecDeque::new(),
             max_frames,
@@ -35,15 +33,20 @@ impl<'a> Recording<'a> {
     }
 
     pub fn add_frame(&mut self, frame: &Frame) -> Result<(), Box<dyn Error>> {
-        if self.width.is_some() && self.height.is_some() {
-            if self.width.unwrap() != frame.width || self.height.unwrap() != frame.height {
-                panic!("Resolution changed mid-record, bailing.")
+        let size = (frame.width, frame.height);
+        if self.size != Some(size) {
+            if self.size.is_some() {
+                log::warn!(
+                    "resolution changed to {}x{}, replay buffer restarted",
+                    frame.width,
+                    frame.height
+                );
+                self.samples.clear();
             }
-        } else {
-            self.width = Some(frame.width);
-            self.height = Some(frame.height);
             let format = vk_format(frame.fourcc)
                 .ok_or_else(|| format!("unsupported plane format {}", frame.fourcc))?;
+            self.encoder = None;
+            self.size = None;
             self.encoder = Some(Encoder::new(
                 self.vk,
                 frame.width,
@@ -51,6 +54,7 @@ impl<'a> Recording<'a> {
                 &self.settings,
                 format,
             )?);
+            self.size = Some(size);
         }
 
         let encoder = self
@@ -64,7 +68,7 @@ impl<'a> Recording<'a> {
     }
 
     pub fn save(&mut self, id: &str) -> Result<(), Box<dyn Error>> {
-        let (width, height) = self.width.zip(self.height).ok_or("no frames recorded")?;
+        let (width, height) = self.size.ok_or("no frames recorded")?;
 
         let clips_dir = clips_dir()?;
         create_user_dir(&clips_dir)?;
@@ -84,13 +88,11 @@ impl<'a> Recording<'a> {
 
         meta.save(id)?;
 
-        // Rename last so a visible .mkv always has its meta.
         fs::rename(part_path, clip_path)?;
         Ok(())
     }
 }
 
-// A clip is only decodable from an IDR frame, so the front is trimmed one GOP at a time.
 fn drop_old_gops(samples: &mut VecDeque<Sample>, max_frames: usize) {
     while let Some(next_idr) = samples.iter().skip(1).position(|s| s.is_idr).map(|p| p + 1)
         && samples.len() - next_idr >= max_frames
