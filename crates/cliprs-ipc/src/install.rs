@@ -89,7 +89,7 @@ pub fn install_daemon_as_root() -> io::Result<()> {
         UNIT_MODE,
         daemon_unit(&daemon)?.as_bytes(),
     )?;
-    // Without the rule everything still works, restarts from the GUI just ask for the password.
+    // not fatal, gui restarts just ask for the password then
     if let Err(error) = install_restart_rule(&user) {
         log::warn!("could not install polkit restart rule: {error}");
     }
@@ -100,7 +100,7 @@ pub fn install_daemon_as_root() -> io::Result<()> {
 }
 
 fn install_daemon_binary() -> io::Result<PathBuf> {
-    // The magic link keeps pointing at the authorized binary even if its path is replaced meanwhile.
+    // magic link still points at the binary that got authorized, even if the path was swapped
     let running = File::open(RUNNING_EXECUTABLE)?;
     let metadata = running.metadata()?;
     let path = env::current_exe()?;
@@ -108,7 +108,7 @@ fn install_daemon_binary() -> io::Result<PathBuf> {
     if root_controlled && path.starts_with(PACKAGED_PREFIX) {
         return Ok(path);
     }
-    // A unit running a user-writable binary would hand root to anything that can replace it.
+    // dont let the unit run a user-writable binary, thats root for whoever replaces it
     let installed = Path::new(DAEMON_INSTALL_DIR).join(DAEMON_BINARY);
     write_atomically(&installed, EXECUTABLE_MODE, running)?;
     Ok(installed)
@@ -205,7 +205,7 @@ fn sibling_binary(name: &str) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-// Rename also replaces a binary that is currently executing, which a plain overwrite cannot.
+// rename works on a running binary, overwriting it doesnt
 fn write_atomically(path: &Path, mode: u32, mut contents: impl Read) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

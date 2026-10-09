@@ -16,15 +16,14 @@ const TRACK_TYPE_VIDEO: u64 = 1;
 const CODEC_ID: &str = "V_MPEG4/ISO/AVC";
 const APP_NAME: &str = "cliprs";
 const UUID_TAG: &str = "CLIPRS_UUID";
-// ffmpeg drops DateUTC when re-encoding but keeps custom tags.
+// ffmpeg drops DateUTC on re-encode, custom tags survive
 const SAVED_AT_TAG: &str = "CLIPRS_SAVED_AT_UNIX_SECS";
-// Matroska dates count nanoseconds from 2001-01-01 UTC.
 const MATROSKA_EPOCH_UNIX_SECS: i64 = 978_307_200;
 const NANOS_PER_MILLI: u64 = 1_000_000;
 const NANOS_PER_SEC: u64 = 1_000_000_000;
 const CUES_ID: [u8; 4] = [0x1C, 0x53, 0xBB, 0x6B];
 const SEEK_POSITION_ID: u64 = 0x53AC;
-// The writer holds the segment header (4-byte ID, 8-byte unknown size) back until the next element.
+// 4 byte id + 8 byte unknown size, the writer holds it back until the next element
 const SEGMENT_HEADER_LEN: u64 = 12;
 const AVCC_VERSION: u8 = 1;
 const AVCC_NAL_LENGTH_4_BYTES: u8 = 0xFF;
@@ -56,7 +55,7 @@ pub fn write_mkv(
         MatroskaSpec::DocTypeReadVersion(2),
     ])))?;
 
-    // An unknown-size segment makes the writer flush each cluster instead of buffering the file.
+    // unknown size, otherwise the writer buffers the whole file
     writer.write_advanced(
         &MatroskaSpec::Segment(Master::Start),
         WriteOptions::is_unknown_sized_element(),
@@ -142,7 +141,7 @@ pub fn write_mkv(
     Ok(())
 }
 
-// SeekPosition is written raw at a fixed 8 bytes so the placeholder can be overwritten in place.
+// raw fixed 8 bytes so the placeholder can be patched in place later
 fn write_seek_head(
     writer: &mut WebmWriter<File>,
     cues_position: u64,
@@ -195,7 +194,7 @@ fn split_nal_units(data: &[u8]) -> Vec<&[u8]> {
         .map(|(n, &start)| {
             let end = starts.get(n + 1).map_or(data.len(), |&next| next - 3);
             let mut nal = &data[start..end];
-            // A NAL never ends in 0x00, so trailing zeros belong to the next 4-byte start code
+            // a nal never ends in 0x00, those belong to the next 4 byte start code
             while let [rest @ .., 0] = nal {
                 nal = rest;
             }

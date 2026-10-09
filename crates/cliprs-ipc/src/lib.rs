@@ -169,7 +169,7 @@ pub fn connector_id(connector: &connector::Info) -> String {
 pub fn monitors() -> io::Result<Vec<Monitor>> {
     let mut monitors = Vec::new();
     for path in drm_card_paths()? {
-        // Cards without display outputs reject the resource query, so one bad card must not hide the rest.
+        // cards without outputs fail the query, dont let them hide the rest
         match card_monitors(&path) {
             Ok(found) => monitors.extend(found),
             Err(error) => log::warn!("skipped {}: {error}", path.display()),
@@ -252,7 +252,7 @@ pub fn notify_error(description: impl Into<String>) {
 
 fn send_notification(notification: &Notification, socket_path: &Path) -> io::Result<()> {
     let socket = UnixDatagram::unbound()?;
-    // The daemon sends from its capture loop, which must not stall on a full overlay queue.
+    // sent from the capture loop, must not stall on a full overlay queue
     socket.set_nonblocking(true)?;
     socket.send_to(&serde_json::to_vec(notification)?, socket_path)?;
     Ok(())
@@ -268,7 +268,6 @@ impl NotificationReceiver {
     }
 
     fn bind_at(socket_path: &Path) -> io::Result<Self> {
-        // A socket file left behind by a previous overlay makes bind fail with AddrInUse.
         match fs::remove_file(socket_path) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
             _ => {}
@@ -322,7 +321,7 @@ impl InstanceLock {
     }
 
     fn acquire_at(lock_path: &Path) -> io::Result<Self> {
-        // The daemon opens this as root in a user-writable dir, where a planted symlink would redirect the fchown.
+        // opened as root in a user-writable dir, a planted symlink would redirect the fchown
         let file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -393,7 +392,6 @@ impl ResourceSample {
         }))
     }
 
-    // 100 is one fully used core, so a multithreaded process can exceed it.
     pub fn cpu_percent_since(&self, previous: &ResourceSample) -> Option<f32> {
         if self.pid != previous.pid {
             return None;
@@ -407,7 +405,7 @@ impl ResourceSample {
 fn read_proc_file(pid: u32, name: &str) -> io::Result<Option<String>> {
     match fs::read_to_string(format!("/proc/{pid}/{name}")) {
         Ok(contents) => Ok(Some(contents)),
-        // A process that exits between open and read fails the read with ESRCH.
+        // process died between open and read
         Err(error)
             if error.kind() == io::ErrorKind::NotFound
                 || error.raw_os_error() == Some(libc::ESRCH) =>
@@ -419,7 +417,7 @@ fn read_proc_file(pid: u32, name: &str) -> io::Result<Option<String>> {
 }
 
 fn parse_cpu_ticks(stat: &str) -> Option<u64> {
-    // The comm field may itself contain spaces and parentheses, so fields are counted after its closing one.
+    // comm may contain spaces and parens, so count from the last one
     let mut fields = stat.rsplit_once(')')?.1.split_ascii_whitespace().skip(11);
     let user_ticks: u64 = fields.next()?.parse().ok()?;
     let system_ticks: u64 = fields.next()?.parse().ok()?;
@@ -441,7 +439,6 @@ fn sysconf(name: libc::c_int) -> io::Result<u64> {
     }
 }
 
-// The daemon runs as root for DRM and evdev access, so files it creates would otherwise be root-owned.
 pub fn give_to_invoking_user(path: &Path) -> io::Result<()> {
     let Some(user) = invoking_user()? else {
         return Ok(());
@@ -472,7 +469,7 @@ fn env_id(name: &str) -> Option<u32> {
 }
 
 fn invoking_user() -> io::Result<Option<InvokingUser>> {
-    // The systemd unit has no sudo variables, so it names the user itself.
+    // no sudo vars under systemd, the unit sets its own
     match env_id(install::SERVICE_UID_VARIABLE).or_else(|| env_id("SUDO_UID")) {
         Some(uid) => user_entry(uid).map(Some),
         None => Ok(None),
@@ -509,7 +506,7 @@ fn user_entry(uid: u32) -> io::Result<InvokingUser> {
 }
 
 fn home_dir() -> io::Result<PathBuf> {
-    // sudo resets HOME to /root, which would split the daemon's files from the GUI's.
+    // sudo resets HOME to /root
     if let Some(user) = invoking_user()? {
         return Ok(user.home);
     }
@@ -519,7 +516,7 @@ fn home_dir() -> io::Result<PathBuf> {
 }
 
 fn xdg_base_dir(variable: &str, home_fallback: &str) -> io::Result<PathBuf> {
-    // sudo drops the XDG variables, so under sudo only the default location is known.
+    // sudo drops the xdg vars, so only the default is known
     if invoking_user()?.is_none()
         && let Some(dir) = env::var_os(variable)
         && !dir.is_empty()
@@ -569,7 +566,6 @@ fn capabilities_path() -> io::Result<PathBuf> {
 }
 
 fn runtime_dir() -> io::Result<PathBuf> {
-    // sudo drops XDG_RUNTIME_DIR, and the overlay binds in the invoking user's runtime dir.
     if let Some(user) = invoking_user()? {
         return Ok(PathBuf::from(format!("/run/user/{}", user.uid)));
     }
@@ -591,7 +587,6 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     }
 }
 
-// Rename is atomic, so a concurrent reader never sees a half-written file.
 fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         create_user_dir(parent)?;

@@ -23,7 +23,6 @@ fn write_jpeg(rgba: &[u8], width: u32, height: u32, path: &Path) -> Result<(), B
         .ok_or("frame buffer does not match its dimensions")?;
     let thumb_height = (height * THUMBNAIL_WIDTH / width).max(1);
     let resized = imageops::resize(&source, THUMBNAIL_WIDTH, thumb_height, FilterType::Triangle);
-    // JPEG has no alpha channel, and XB24 frames leave it undefined.
     DynamicImage::ImageRgba8(resized).to_rgb8().save(path)?;
     Ok(())
 }

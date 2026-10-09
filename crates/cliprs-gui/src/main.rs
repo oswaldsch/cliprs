@@ -84,7 +84,6 @@ impl State {
     }
 }
 
-// A polkit prompt blocks until answered, which would freeze the window on the UI thread.
 fn blocking_task(
     work: impl FnOnce() -> io::Result<()> + Send + 'static,
 ) -> Task<Result<(), String>> {

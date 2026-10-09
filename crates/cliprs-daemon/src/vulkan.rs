@@ -244,7 +244,7 @@ fn create_logical_device(
         unsafe { instance.create_device(pdev, &device_info, None) }
     };
 
-    // The kernel refuses above-normal GPU priority without CAP_SYS_NICE, so non-root runs use the default.
+    // kernel wants CAP_SYS_NICE for above-normal gpu priority, so retry without
     let device = match create(true) {
         Err(vk::Result::ERROR_NOT_PERMITTED) => create(false),
         result => result,
