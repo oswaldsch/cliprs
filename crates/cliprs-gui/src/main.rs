@@ -12,7 +12,7 @@ use std::time::Duration;
 use cliprs_ipc::{Process, ResourceSample, Settings, install, notify, notify_error};
 use iced::futures::channel::oneshot;
 use iced::widget::space::vertical;
-use iced::widget::{button, column, container, row};
+use iced::widget::{button, column, container, row, rule};
 use iced::{Element, Length, Subscription, Task, Theme};
 
 use library::Clip;
@@ -22,7 +22,7 @@ use crate::resources::construct_resource_tab;
 use crate::style::icon::{self, Tint, icon};
 use crate::style::space;
 
-const DEBUG_SETUP: bool = true;
+const DEBUG_SETUP: bool = false;
 const SIDEBAR_WIDTH: f32 = 220.0;
 const CONTENT_MAX_WIDTH: f32 = 640.0;
 
@@ -140,7 +140,8 @@ fn view(state: &State) -> Element<'_, Message> {
         )
         .spacing(space::XS),
         vertical(),
-    ];
+    ]
+    .spacing(space::MD);
     if let Some(sample) = &state.resource_sample {
         sidebar = sidebar.push(construct_resource_tab(sample, state.cpu_percent));
     }
@@ -152,7 +153,9 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let main_view = construct_main_view(state);
 
-    container(row![sidebar_container, main_view]).into()
+    let divider = rule::vertical(style::STROKE).style(style::surface::divider);
+
+    container(row![sidebar_container, divider, main_view]).into()
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {

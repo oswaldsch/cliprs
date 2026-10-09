@@ -1,7 +1,8 @@
 use iced::widget::container::Style;
+use iced::widget::rule;
 use iced::{Background, Border, Theme, border};
 
-use super::{STROKE, color, outlined, radius};
+use super::{color, outlined, radius};
 
 fn style(background: iced::Color, border: Border) -> Style {
     Style {
@@ -13,14 +14,16 @@ fn style(background: iced::Color, border: Border) -> Style {
 }
 
 pub fn panel(_theme: &Theme) -> Style {
-    style(
-        color::SURFACE,
-        Border {
-            color: color::OUTLINE,
-            width: STROKE,
-            radius: 0.0.into(),
-        },
-    )
+    style(color::SURFACE, Border::default())
+}
+
+pub fn divider(_theme: &Theme) -> rule::Style {
+    rule::Style {
+        color: color::OUTLINE,
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    }
 }
 
 pub fn card(_theme: &Theme) -> Style {

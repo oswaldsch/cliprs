@@ -4,10 +4,10 @@ use iced::widget::svg::{self, Handle, Svg};
 use iced::widget::{Container, Text, container, text};
 use iced::{Background, Border, Color, Font, Theme, color};
 
-const SURFACE: Color = color!(0x161B24);
-const OUTLINE: Color = color!(0x2A3140);
-const TEXT: Color = color!(0xE6E9EF);
-const MUTED: Color = color!(0x8B93A5);
+const SURFACE: Color = color!(0x292E36);
+const OUTLINE: Color = color!(0x4F5967);
+const TEXT: Color = color!(0xF4F5F7);
+const MUTED: Color = color!(0xB8BDC5);
 pub const SUCCESS: Color = color!(0x22C55E);
 pub const DANGER: Color = color!(0xEF4444);
 

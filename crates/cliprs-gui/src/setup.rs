@@ -8,7 +8,7 @@ use iced::{
     widget::{button, column, container, row},
 };
 
-use crate::style::icon::{self, Tint, icon};
+use crate::style::icon::{self, Tint, icon, logo};
 use crate::style::text::{caption, heading, lead, title};
 use crate::style::{self, space};
 
@@ -156,10 +156,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 pub fn view(state: &State) -> Element<'_, Message> {
     match state.current_page {
         0 => column![
-            heading("Welcome to cliprs!")
-                .width(Fill)
-                .height(Fill)
-                .center(),
+            container(
+                column![logo(icon::XL), heading("Welcome to cliprs!")]
+                    .spacing(space::MD)
+                    .align_x(Center)
+            )
+            .center(Fill),
             construct_button_row(&state)
         ]
         .padding(space::LG)
