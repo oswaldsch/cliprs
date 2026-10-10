@@ -2,6 +2,7 @@ use ash::khr;
 use ash::vk::{self, TaggedStructure, native};
 use cliprs_ipc::Settings;
 use std::error::Error;
+use std::time::Instant;
 
 use crate::kms::Frame;
 use crate::readback::find_readback_memory;
@@ -69,6 +70,7 @@ fn with_profile_list<R>(f: impl FnOnce(&vk::VideoProfileListInfoKHR<'_>) -> R) -
 pub struct Sample {
     pub data: Vec<u8>,
     pub is_idr: bool,
+    pub captured_at: Instant,
 }
 
 struct DpbSlot {
@@ -366,6 +368,7 @@ impl<'a> Encoder<'a> {
     }
 
     pub fn encode_image(&mut self, src: vk::Image) -> Result<Sample, Box<dyn Error>> {
+        let captured_at = Instant::now();
         let idr = self.frame_in_gop == 0;
         if idr {
             self.idr_count = self.idr_count.wrapping_add(1);
@@ -385,6 +388,7 @@ impl<'a> Encoder<'a> {
         let sample = Sample {
             data: bytes,
             is_idr: idr,
+            captured_at,
         };
 
         Ok(sample)
@@ -1298,11 +1302,14 @@ mod tests {
 
         let mut samples = Vec::new();
         let mut old = vk::ImageLayout::UNDEFINED;
+        let start = Instant::now();
         for i in 0..frames {
             let t = i as f32 / frames as f32;
             fill_and_release(&vk, cb, image, [t, 0.2, 1.0 - t, 1.0], old);
             old = vk::ImageLayout::GENERAL;
-            let sample = encoder.encode_image(image).unwrap();
+            let mut sample = encoder.encode_image(image).unwrap();
+            // frames encode faster than real time, the muxer needs them one interval apart
+            sample.captured_at = start + std::time::Duration::from_secs_f64(f64::from(i) / 60.0);
             assert!(!sample.data.is_empty());
             out.write_all(&sample.data).unwrap();
             samples.push(sample);
@@ -1310,6 +1317,7 @@ mod tests {
         crate::muxer::write_mkv(
             std::path::Path::new(&format!("{OUT_DIR}/test.mkv")),
             &samples,
+            &[],
             "synthetic",
             &cliprs_ipc::ClipMeta {
                 title: Some("synthetic frames".to_string()),

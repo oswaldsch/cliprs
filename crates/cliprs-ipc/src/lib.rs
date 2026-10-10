@@ -10,7 +10,9 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, chown, fchown};
 use std::os::unix::net::UnixDatagram;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::ptr;
 use std::time::{Duration, Instant};
 
@@ -455,6 +457,26 @@ pub fn create_user_dir(dir: &Path) -> io::Result<()> {
     }
     fs::create_dir(dir)?;
     give_to_invoking_user(dir)
+}
+
+pub fn unprivileged_command(program: impl AsRef<OsStr>) -> io::Result<Command> {
+    let mut command = Command::new(program);
+    match invoking_user()?.filter(|user| user.uid != 0) {
+        Some(user) => {
+            // setting a uid as root also makes std clear the supplementary groups
+            command
+                .uid(user.uid)
+                .gid(user.gid)
+                .env_clear()
+                .env("HOME", &user.home)
+                .env("XDG_RUNTIME_DIR", runtime_dir()?);
+        }
+        None if unsafe { libc::geteuid() } == 0 => {
+            return Err(io::Error::other("no user to drop root privileges to"));
+        }
+        None => {}
+    }
+    Ok(command)
 }
 
 struct InvokingUser {

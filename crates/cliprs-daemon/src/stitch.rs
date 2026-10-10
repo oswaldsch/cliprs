@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cliprs_ipc::{ClipMeta, Settings, clips_dir, create_user_dir, give_to_invoking_user};
 
+use crate::audio;
 use crate::encode::{Encoder, Sample};
 use crate::kms::Frame;
 use crate::muxer::write_mkv;
@@ -17,6 +18,7 @@ pub struct Recording<'a> {
     encoder: Option<Encoder<'a>>,
     samples: VecDeque<Sample>,
     max_frames: usize,
+    audio: audio::Ring,
 }
 
 impl<'a> Recording<'a> {
@@ -29,6 +31,7 @@ impl<'a> Recording<'a> {
             encoder: None,
             samples: VecDeque::new(),
             max_frames,
+            audio: audio::start(),
         })
     }
 
@@ -64,6 +67,9 @@ impl<'a> Recording<'a> {
 
         self.samples.push_back(encoder.encode_frame(frame)?);
         drop_old_gops(&mut self.samples, self.max_frames);
+        if let Some(oldest) = self.samples.front() {
+            self.audio.drop_before(oldest.captured_at);
+        }
         Ok(())
     }
 
@@ -73,17 +79,24 @@ impl<'a> Recording<'a> {
         let clips_dir = clips_dir()?;
         create_user_dir(&clips_dir)?;
         let samples = VecDeque::make_contiguous(&mut self.samples);
+        let (Some(first), Some(last)) = (samples.first(), samples.last()) else {
+            return Err("no frames recorded".into());
+        };
+        let frame_interval = Duration::from_secs_f64(1.0 / f64::from(self.settings.fps));
+        let duration = last.captured_at.duration_since(first.captured_at) + frame_interval;
+        let audio_packets = self.audio.packets();
+        let audio_blocks = audio::blocks(&audio_packets, first.captured_at);
         let clip_path = clips_dir.join(format!("{id}.mkv"));
         let part_path = clips_dir.join(format!("{id}.mkv.part"));
         let meta = ClipMeta {
             title: None,
             saved_at_unix_secs: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-            duration_secs: samples.len() as f64 / f64::from(self.settings.fps),
+            duration_secs: duration.as_secs_f64(),
             fps: self.settings.fps,
             width,
             height,
         };
-        write_mkv(&part_path, samples, id, &meta)?;
+        write_mkv(&part_path, samples, &audio_blocks, id, &meta)?;
         give_to_invoking_user(&part_path)?;
 
         meta.save(id)?;

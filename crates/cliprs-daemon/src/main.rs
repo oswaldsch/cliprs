@@ -1,8 +1,10 @@
+mod audio;
 mod capture;
 mod encode;
 mod hotkeys;
 mod kms;
 mod muxer;
+mod pipewire_capture;
 mod readback;
 mod stitch;
 mod thumbnail;
@@ -102,6 +104,14 @@ fn main() {
     if env::args().nth(1).as_deref() == Some(install::INSTALL_ARGUMENT) {
         if let Err(error) = install::install_daemon_as_root() {
             log::error!("install failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if env::args().nth(1).as_deref() == Some(audio::PIPEWIRE_CAPTURE_ARGUMENT) {
+        if let Err(error) = pipewire_capture::run() {
+            log::error!("audio helper stopped: {error}");
             std::process::exit(1);
         }
         return;

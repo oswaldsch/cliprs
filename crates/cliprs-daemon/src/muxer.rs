@@ -1,19 +1,29 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
+use std::iter::Peekable;
 use std::path::Path;
 
 use cliprs_ipc::ClipMeta;
 use webm_iterable::matroska_spec::{Master, MatroskaSpec, SimpleBlock};
 use webm_iterable::{WebmWriter, WriteOptions};
 
+use crate::audio;
 use crate::encode::Sample;
 
 const NAL_SPS: u8 = 7;
 const NAL_PPS: u8 = 8;
-const TRACK_NUMBER: u64 = 1;
+const VIDEO_TRACK_NUMBER: u64 = 1;
+const AUDIO_TRACK_NUMBER: u64 = 2;
 const TRACK_TYPE_VIDEO: u64 = 1;
-const CODEC_ID: &str = "V_MPEG4/ISO/AVC";
+const TRACK_TYPE_AUDIO: u64 = 2;
+const VIDEO_CODEC_ID: &str = "V_MPEG4/ISO/AVC";
+const AUDIO_CODEC_ID: &str = "A_OPUS";
+const OPUS_HEAD_MAGIC: &[u8] = b"OpusHead";
+const OPUS_HEAD_VERSION: u8 = 1;
+const OPUS_NO_OUTPUT_GAIN: i16 = 0;
+const OPUS_MAPPING_FAMILY_STEREO: u8 = 0;
+const OPUS_SEEK_PRE_ROLL_NANOS: u64 = 80_000_000;
 const APP_NAME: &str = "cliprs";
 const UUID_TAG: &str = "CLIPRS_UUID";
 // ffmpeg drops DateUTC on re-encode, custom tags survive
@@ -33,6 +43,7 @@ const AVCC_ONE_PPS: u8 = 1;
 pub fn write_mkv(
     path: &Path,
     samples: &[Sample],
+    audio: &[audio::Block],
     id: &str,
     meta: &ClipMeta,
 ) -> Result<(), Box<dyn Error>> {
@@ -42,7 +53,12 @@ pub fn write_mkv(
     let pps = find_nal(&first_nals, NAL_PPS).ok_or("first sample has no PPS")?;
 
     let fps = u64::from(meta.fps);
-    let timestamp_ms = |frame: usize| frame as u64 * 1000 / fps;
+    let timestamp_ms = |sample: &Sample| {
+        sample
+            .captured_at
+            .duration_since(first.captured_at)
+            .as_millis() as u64
+    };
 
     let mut writer = WebmWriter::new(File::create(path)?);
     writer.write(&MatroskaSpec::Ebml(Master::Full(vec![
@@ -76,21 +92,23 @@ pub fn write_mkv(
     }
     writer.write(&MatroskaSpec::Info(Master::Full(info)))?;
 
-    writer.write(&MatroskaSpec::Tracks(Master::Full(vec![
-        MatroskaSpec::TrackEntry(Master::Full(vec![
-            MatroskaSpec::TrackNumber(TRACK_NUMBER),
-            MatroskaSpec::TrackUID(TRACK_NUMBER),
-            MatroskaSpec::TrackType(TRACK_TYPE_VIDEO),
-            MatroskaSpec::FlagLacing(0),
-            MatroskaSpec::CodecID(CODEC_ID.to_string()),
-            MatroskaSpec::CodecPrivate(avc_decoder_config(sps, pps)?),
-            MatroskaSpec::DefaultDuration(NANOS_PER_SEC / fps),
-            MatroskaSpec::Video(Master::Full(vec![
-                MatroskaSpec::PixelWidth(u64::from(meta.width)),
-                MatroskaSpec::PixelHeight(u64::from(meta.height)),
-            ])),
+    let mut tracks = vec![MatroskaSpec::TrackEntry(Master::Full(vec![
+        MatroskaSpec::TrackNumber(VIDEO_TRACK_NUMBER),
+        MatroskaSpec::TrackUID(VIDEO_TRACK_NUMBER),
+        MatroskaSpec::TrackType(TRACK_TYPE_VIDEO),
+        MatroskaSpec::FlagLacing(0),
+        MatroskaSpec::CodecID(VIDEO_CODEC_ID.to_string()),
+        MatroskaSpec::CodecPrivate(avc_decoder_config(sps, pps)?),
+        MatroskaSpec::DefaultDuration(NANOS_PER_SEC / fps),
+        MatroskaSpec::Video(Master::Full(vec![
+            MatroskaSpec::PixelWidth(u64::from(meta.width)),
+            MatroskaSpec::PixelHeight(u64::from(meta.height)),
         ])),
-    ])))?;
+    ]))];
+    if !audio.is_empty() {
+        tracks.push(opus_track());
+    }
+    writer.write(&MatroskaSpec::Tracks(Master::Full(tracks)))?;
 
     writer.write(&MatroskaSpec::Tags(Master::Full(vec![MatroskaSpec::Tag(
         Master::Full(vec![
@@ -101,14 +119,16 @@ pub fn write_mkv(
     )])))?;
 
     let mut cue_points = Vec::new();
-    let mut frame = 0;
-    for gop in samples.chunk_by(|_, next| !next.is_idr) {
-        let cluster_ms = timestamp_ms(frame);
+    let mut audio = audio.iter().peekable();
+    let mut gops = samples.chunk_by(|_, next| !next.is_idr).peekable();
+    while let Some(gop) = gops.next() {
+        let cluster_ms = timestamp_ms(&gop[0]);
+        let next_cluster_ms = gops.peek().map_or(u64::MAX, |next| timestamp_ms(&next[0]));
         let cluster_position = writer.get_mut().stream_position()? - segment_start;
         cue_points.push(MatroskaSpec::CuePoint(Master::Full(vec![
             MatroskaSpec::CueTime(cluster_ms),
             MatroskaSpec::CueTrackPositions(Master::Full(vec![
-                MatroskaSpec::CueTrack(TRACK_NUMBER),
+                MatroskaSpec::CueTrack(VIDEO_TRACK_NUMBER),
                 MatroskaSpec::CueClusterPosition(cluster_position),
             ])),
         ])));
@@ -116,19 +136,21 @@ pub fn write_mkv(
         writer.write(&MatroskaSpec::Cluster(Master::Start))?;
         writer.write(&MatroskaSpec::Timestamp(cluster_ms))?;
         for sample in gop {
+            let sample_ms = timestamp_ms(sample);
+            write_audio_before(&mut writer, &mut audio, sample_ms, cluster_ms)?;
             let data = to_avcc(&sample.data);
             let block = SimpleBlock::new_uncheked(
                 &data,
-                TRACK_NUMBER,
-                i16::try_from(timestamp_ms(frame) - cluster_ms)?,
+                VIDEO_TRACK_NUMBER,
+                i16::try_from(sample_ms - cluster_ms)?,
                 false,
                 None,
                 false,
                 sample.is_idr,
             );
             writer.write(&MatroskaSpec::from(block))?;
-            frame += 1;
         }
+        write_audio_before(&mut writer, &mut audio, next_cluster_ms, cluster_ms)?;
         writer.write(&MatroskaSpec::Cluster(Master::End))?;
     }
 
@@ -139,6 +161,55 @@ pub fn write_mkv(
     write_seek_head(&mut writer, cues_position)?;
     writer.into_inner()?;
     Ok(())
+}
+
+fn write_audio_before<'a>(
+    writer: &mut WebmWriter<File>,
+    audio: &mut Peekable<impl Iterator<Item = &'a audio::Block<'a>>>,
+    end_ms: u64,
+    cluster_ms: u64,
+) -> Result<(), Box<dyn Error>> {
+    while let Some(packet) = audio.next_if(|packet| packet.start_ms < end_ms) {
+        let block = SimpleBlock::new_uncheked(
+            packet.data,
+            AUDIO_TRACK_NUMBER,
+            i16::try_from(packet.start_ms - cluster_ms)?,
+            false,
+            None,
+            false,
+            true,
+        );
+        writer.write(&MatroskaSpec::from(block))?;
+    }
+    Ok(())
+}
+
+fn opus_track() -> MatroskaSpec {
+    let delay_frames = u64::from(audio::ENCODER_DELAY_FRAMES);
+    MatroskaSpec::TrackEntry(Master::Full(vec![
+        MatroskaSpec::TrackNumber(AUDIO_TRACK_NUMBER),
+        MatroskaSpec::TrackUID(AUDIO_TRACK_NUMBER),
+        MatroskaSpec::TrackType(TRACK_TYPE_AUDIO),
+        MatroskaSpec::FlagLacing(0),
+        MatroskaSpec::CodecID(AUDIO_CODEC_ID.to_string()),
+        MatroskaSpec::CodecPrivate(opus_head()),
+        MatroskaSpec::CodecDelay(delay_frames * NANOS_PER_SEC / u64::from(audio::SAMPLE_RATE)),
+        MatroskaSpec::SeekPreRoll(OPUS_SEEK_PRE_ROLL_NANOS),
+        MatroskaSpec::Audio(Master::Full(vec![
+            MatroskaSpec::SamplingFrequency(f64::from(audio::SAMPLE_RATE)),
+            MatroskaSpec::Channels(u64::from(audio::CHANNELS)),
+        ])),
+    ]))
+}
+
+fn opus_head() -> Vec<u8> {
+    let mut head = OPUS_HEAD_MAGIC.to_vec();
+    head.extend_from_slice(&[OPUS_HEAD_VERSION, audio::CHANNELS as u8]);
+    head.extend_from_slice(&audio::ENCODER_DELAY_FRAMES.to_le_bytes());
+    head.extend_from_slice(&audio::SAMPLE_RATE.to_le_bytes());
+    head.extend_from_slice(&OPUS_NO_OUTPUT_GAIN.to_le_bytes());
+    head.push(OPUS_MAPPING_FAMILY_STEREO);
+    head
 }
 
 // raw fixed 8 bytes so the placeholder can be patched in place later
