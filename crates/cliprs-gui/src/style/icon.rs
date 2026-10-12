@@ -12,6 +12,7 @@ pub enum Tint {
     Text,
     Muted,
     Accent,
+    Danger,
     Nav { selected: bool },
 }
 
@@ -30,6 +31,7 @@ pub fn icon(bytes: &'static [u8], size: f32, tint: Tint) -> Svg<'static> {
                 (Tint::Text, _) => color::TEXT,
                 (Tint::Muted, _) => color::MUTED,
                 (Tint::Accent, _) => color::ACCENT,
+                (Tint::Danger, _) => color::DANGER,
                 (Tint::Nav { selected: true }, _) => color::ON_ACCENT,
                 (Tint::Nav { selected: false }, Status::Idle) => color::MUTED,
                 (Tint::Nav { selected: false }, Status::Hovered) => color::TEXT,

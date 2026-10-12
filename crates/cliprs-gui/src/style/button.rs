@@ -52,6 +52,14 @@ pub fn nav(selected: bool) -> impl Fn(&Theme, Status) -> Style {
     }
 }
 
+pub fn overlay(_theme: &Theme, status: Status) -> Style {
+    let background = match status {
+        Status::Active | Status::Disabled => color::SHADOW,
+        Status::Hovered | Status::Pressed => color::SCRIM,
+    };
+    style(Some(background), color::TEXT, border::rounded(radius::SM))
+}
+
 pub fn card(selected: bool) -> impl Fn(&Theme, Status) -> Style {
     move |_theme, status| {
         let (background, text_color) = match status {

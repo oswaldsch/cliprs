@@ -37,6 +37,7 @@ enum Message {
     ApplySettings,
     SettingsApplied(Result<(), String>),
     ClipClicked(PathBuf),
+    ClipDeleted(PathBuf, PathBuf, PathBuf),
     ResourceTick,
 }
 
@@ -197,6 +198,22 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 );
                 notify_error(format!("Failed to open file: {error}"));
             }
+        }
+        Message::ClipDeleted(video_path, meta_path, thumb_path) => {
+            let paths = [&video_path, &meta_path, &thumb_path];
+
+            for path in paths {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        log::error!("failed to delete {}: {}", path.display(), error);
+                        notify_error(format!("Failed to delete file: {error}"));
+                        break;
+                    }
+                }
+            }
+            state.clips = library::load_clips();
         }
         Message::ResourceTick => match Process::Daemon.sample_resources() {
             Ok(sample) => {

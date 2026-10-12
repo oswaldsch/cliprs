@@ -5,17 +5,22 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Datelike, Local};
-use cliprs_ipc::{ClipMeta, clips_dir, thumbnail_path};
-use iced::widget::{column, container, grid, image, mouse_area, row, scrollable, stack};
+use cliprs_ipc::{ClipMeta, clip_meta_path, clips_dir, thumbnail_path};
+use iced::widget::space::horizontal;
+use iced::widget::{
+    button, column, container, grid, hover, image, mouse_area, row, scrollable, stack,
+};
 use iced::{Alignment, ContentFit, Element, Length};
 use webm_iterable::WebmIterator;
 use webm_iterable::matroska_spec::{Master, MatroskaSpec};
 
 use crate::Message;
+use crate::style::icon::{Tint, icon};
 use crate::style::{self, radius, space};
 
 pub struct Clip {
     video_path: PathBuf,
+    meta_path: PathBuf,
     thumbnail_path: PathBuf,
     title: String,
     details: Option<String>,
@@ -43,6 +48,10 @@ fn load_clip(video_path: PathBuf) -> Clip {
     let meta = id
         .as_deref()
         .and_then(|id| ClipMeta::load(id).ok().flatten());
+    let meta_path = id
+        .as_deref()
+        .and_then(|id| clip_meta_path(id).ok())
+        .unwrap_or_default();
     let thumbnail_path = id
         .as_deref()
         .and_then(|id| thumbnail_path(id).ok())
@@ -58,6 +67,7 @@ fn load_clip(video_path: PathBuf) -> Clip {
 
     Clip {
         video_path,
+        meta_path,
         thumbnail_path,
         details,
         saved_at_unix_secs: meta.as_ref().map(|meta| meta.saved_at_unix_secs),
@@ -144,7 +154,7 @@ fn clip_thumbnail(clip: &Clip) -> Element<'_, Message> {
 fn clip_card(clip: &Clip) -> Element<'_, Message> {
     let saved_at = clip.saved_at_unix_secs.and_then(format_saved_at);
 
-    mouse_area(
+    mouse_area(hover(
         column![
             clip_thumbnail(clip),
             row![style::text::title(clip.title.as_str()).width(Length::Fill)]
@@ -158,7 +168,31 @@ fn clip_card(clip: &Clip) -> Element<'_, Message> {
                 .map(|details| Element::from(style::text::caption(details))),
         )
         .spacing(space::XS),
-    )
+        row![
+            horizontal(),
+            button(icon(
+                include_bytes!("../assets/share.svg"),
+                style::icon::SM,
+                Tint::Accent,
+            )) // TODO: implement share with compression modal or smth
+            .padding(space::XS)
+            .style(style::button::overlay),
+            button(icon(
+                include_bytes!("../assets/trash.svg"),
+                style::icon::SM,
+                Tint::Danger,
+            ))
+            .padding(space::XS)
+            .style(style::button::overlay)
+            .on_press(Message::ClipDeleted(
+                clip.video_path.clone(),
+                clip.meta_path.clone(),
+                clip.thumbnail_path.clone(),
+            )) // TODO: add a modal (or similar) here, right now you can just accidentally delete a clip while sharing it
+        ]
+        .padding(space::SM)
+        .width(Length::Fill),
+    ))
     .on_press(Message::ClipClicked(clip.video_path.clone()))
     .into()
 }
