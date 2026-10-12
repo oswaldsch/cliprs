@@ -561,7 +561,7 @@ fn config_dir() -> io::Result<PathBuf> {
     Ok(xdg_base_dir("XDG_CONFIG_HOME", ".config")?.join(APP_DIR))
 }
 
-fn clip_meta_path(id: &str) -> io::Result<PathBuf> {
+pub fn clip_meta_path(id: &str) -> io::Result<PathBuf> {
     Ok(xdg_base_dir("XDG_DATA_HOME", ".local/share")?
         .join(APP_DIR)
         .join(format!("{id}.json")))
@@ -643,6 +643,7 @@ mod tests {
             average_bitrate_bps: 20_000_000,
             clip_seconds: 15,
             monitor: Some("card1-DP-1".to_owned()),
+            keycode: "KEY_F8".to_string(),
         };
         write_json(&path, &settings).unwrap();
         assert_eq!(read_json::<Settings>(&path).unwrap(), Some(settings));
