@@ -142,10 +142,75 @@ impl fmt::Display for DurationOptions {
     }
 }
 
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub enum HotkeyOptions {
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    #[default]
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+}
+
+impl HotkeyOptions {
+    const ALL: &[HotkeyOptions] = &[
+        HotkeyOptions::F1,
+        HotkeyOptions::F2,
+        HotkeyOptions::F3,
+        HotkeyOptions::F4,
+        HotkeyOptions::F5,
+        HotkeyOptions::F6,
+        HotkeyOptions::F7,
+        HotkeyOptions::F8,
+        HotkeyOptions::F9,
+        HotkeyOptions::F10,
+        HotkeyOptions::F11,
+        HotkeyOptions::F12,
+    ];
+
+    fn key_name(&self) -> String {
+        format!("KEY_{self}")
+    }
+
+    fn from_key_name(name: &str) -> Option<HotkeyOptions> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|option| option.key_name() == name)
+    }
+}
+
+impl fmt::Display for HotkeyOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            HotkeyOptions::F1 => write!(formatter, "F1"),
+            HotkeyOptions::F2 => write!(formatter, "F2"),
+            HotkeyOptions::F3 => write!(formatter, "F3"),
+            HotkeyOptions::F4 => write!(formatter, "F4"),
+            HotkeyOptions::F5 => write!(formatter, "F5"),
+            HotkeyOptions::F6 => write!(formatter, "F6"),
+            HotkeyOptions::F7 => write!(formatter, "F7"),
+            HotkeyOptions::F8 => write!(formatter, "F8"),
+            HotkeyOptions::F9 => write!(formatter, "F9"),
+            HotkeyOptions::F10 => write!(formatter, "F10"),
+            HotkeyOptions::F11 => write!(formatter, "F11"),
+            HotkeyOptions::F12 => write!(formatter, "F12"),
+        }
+    }
+}
+
 pub struct Form {
     pub fps: Option<FPSOptions>,
     pub bitrate: Option<BitrateOptions>,
     pub duration: Option<DurationOptions>,
+    pub hotkey: Option<HotkeyOptions>,
     monitor: Option<String>,
     gop_frames: Option<u32>,
 }
@@ -157,6 +222,7 @@ impl Form {
             fps: FPSOptions::from_value(settings.fps),
             bitrate: BitrateOptions::from_bps(settings.average_bitrate_bps),
             duration: DurationOptions::from_seconds(settings.clip_seconds),
+            hotkey: HotkeyOptions::from_key_name(&settings.keycode),
             monitor: settings.monitor,
             gop_frames: Capabilities::load()
                 .ok()
@@ -177,6 +243,7 @@ impl Form {
             fps: self.fps?.value(),
             average_bitrate_bps: self.bitrate?.average_bps(),
             clip_seconds: self.duration?.seconds(),
+            keycode: self.hotkey?.key_name(),
             monitor: self.monitor.clone(),
         })
     }
@@ -257,6 +324,10 @@ pub fn view(form: &Form, applying: bool) -> Element<'_, Message> {
                 Message::DurationChanged
             ),
         ),
+        setting_row(
+            "Clip hotkey",
+            styled_pick_list(HotkeyOptions::ALL, form.hotkey, Message::HotkeyChanged)
+        )
     ]
     .extend(
         form.estimate_ram_mb()

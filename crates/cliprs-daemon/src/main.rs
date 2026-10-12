@@ -12,6 +12,7 @@ mod vulkan;
 
 use std::env;
 use std::error::Error;
+use std::str::FromStr;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -47,9 +48,9 @@ fn recording_loop(
     settings: Settings,
 ) -> Result<(), Box<dyn Error>> {
     let interval = Duration::from_secs_f64(1.0 / settings.fps as f64);
+    let record_hotkey = hotkeys::hotkey_presses(KeyCode::from_str(&settings.keycode)?);
     let mut recording = stitch::Recording::new(vk, settings)?;
     let start = Instant::now();
-    let record_hotkey = hotkeys::hotkey_presses(KeyCode::KEY_F8);
 
     let mut i = 0;
     loop {

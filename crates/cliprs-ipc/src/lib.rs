@@ -39,12 +39,16 @@ const EDID_DESCRIPTOR_BYTES: usize = 18;
 const EDID_MONITOR_NAME_HEADER: [u8; 5] = [0, 0, 0, 0xFC, 0];
 const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
 const PEAK_TO_AVERAGE_BITRATE: u64 = 2;
+const DEFAULT_KEYCODE: &str = "KEY_F8";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub fps: u32,
     pub average_bitrate_bps: u64,
     pub clip_seconds: u32,
+    // evdev key name, the daemon parses it straight into a KeyCode
+    #[serde(default = "default_keycode")]
+    pub keycode: String,
     #[serde(default)]
     pub monitor: Option<String>,
 }
@@ -55,9 +59,14 @@ impl Default for Settings {
             fps: 60,
             average_bitrate_bps: 30_000_000,
             clip_seconds: 30,
+            keycode: default_keycode(),
             monitor: None,
         }
     }
+}
+
+fn default_keycode() -> String {
+    DEFAULT_KEYCODE.to_string()
 }
 
 impl Settings {

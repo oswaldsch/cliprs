@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use cliprs_ipc::{Process, ResourceSample, Settings, install, notify, notify_error};
+use cliprs_ipc::{Process, ResourceSample, Settings, install, notify_error};
 use iced::futures::channel::oneshot;
 use iced::widget::space::vertical;
 use iced::widget::{button, column, container, row, rule};
@@ -19,6 +19,7 @@ use library::Clip;
 use settings::{BitrateOptions, DurationOptions, FPSOptions};
 
 use crate::resources::construct_resource_tab;
+use crate::settings::HotkeyOptions;
 use crate::style::icon::{self, Tint, icon};
 use crate::style::space;
 
@@ -32,6 +33,7 @@ enum Message {
     FPSChanged(FPSOptions),
     BitrateChanged(BitrateOptions),
     DurationChanged(DurationOptions),
+    HotkeyChanged(HotkeyOptions),
     ApplySettings,
     SettingsApplied(Result<(), String>),
     ClipClicked(PathBuf),
@@ -168,6 +170,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::FPSChanged(selected) => state.settings.fps = Some(selected),
         Message::BitrateChanged(selected) => state.settings.bitrate = Some(selected),
         Message::DurationChanged(selected) => state.settings.duration = Some(selected),
+        Message::HotkeyChanged(selected) => state.settings.hotkey = Some(selected),
         Message::ApplySettings => match state.settings.save() {
             Ok(()) => {
                 state.applying_settings = true;
