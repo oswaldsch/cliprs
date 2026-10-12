@@ -162,7 +162,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     .align_x(Center)
             )
             .center(Fill),
-            construct_button_row(&state)
+            construct_button_row(state)
         ]
         .padding(space::LG)
         .into(),
@@ -179,7 +179,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .as_deref()
                 .map(|error| lead(error).width(Fill).center().into()),
         )
-        .push(construct_button_row(&state))
+        .push(construct_button_row(state))
         .padding(space::LG)
         .into(),
         _ => column![heading("Page count invalid")].into(),

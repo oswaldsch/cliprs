@@ -29,23 +29,37 @@ pub struct VulkanDevice {
     pub encode_queue_family_index: u32,
 }
 
+pub struct QueueInfo {
+    pub queue: vk::Queue,
+    pub family_index: u32,
+}
+
+pub struct DeviceQueue {
+    pub device: Device,
+    pub graphics: QueueInfo,
+    pub encode: QueueInfo,
+}
+
 impl VulkanDevice {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let entry = Entry::linked();
         let instance = create_instance(&entry)?;
         let pdev = pick_device(&instance)?;
-        let (device, (queue, queue_family_index), (encode_queue, encode_queue_family_index)) =
-            create_logical_device(&instance, pdev)?;
+        let DeviceQueue {
+            device,
+            graphics,
+            encode,
+        } = create_logical_device(&instance, pdev)?;
 
         Ok(Self {
             entry,
             instance,
             pdev,
             device,
-            queue,
-            queue_family_index,
-            encode_queue,
-            encode_queue_family_index,
+            queue: graphics.queue,
+            queue_family_index: graphics.family_index,
+            encode_queue: encode.queue,
+            encode_queue_family_index: encode.family_index,
         })
     }
 
@@ -186,7 +200,7 @@ fn pick_device(instance: &Instance) -> Result<vk::PhysicalDevice, Box<dyn Error>
 fn create_logical_device(
     instance: &Instance,
     pdev: vk::PhysicalDevice,
-) -> Result<(Device, (vk::Queue, u32), (vk::Queue, u32)), Box<dyn Error>> {
+) -> Result<DeviceQueue, Box<dyn Error>> {
     let queue_families = unsafe { instance.get_physical_device_queue_family_properties(pdev) };
     let find_family = |flag: vk::QueueFlags| {
         queue_families
@@ -252,11 +266,17 @@ fn create_logical_device(
     let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
     let encode_queue = unsafe { device.get_device_queue(encode_queue_family_index, 0) };
 
-    Ok((
+    Ok(DeviceQueue {
         device,
-        (queue, queue_family_index),
-        (encode_queue, encode_queue_family_index),
-    ))
+        graphics: QueueInfo {
+            queue,
+            family_index: queue_family_index,
+        },
+        encode: QueueInfo {
+            queue: encode_queue,
+            family_index: encode_queue_family_index,
+        },
+    })
 }
 
 fn high_priority_families(instance: &Instance, pdev: vk::PhysicalDevice) -> Vec<u32> {

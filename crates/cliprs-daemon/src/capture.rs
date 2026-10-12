@@ -31,7 +31,9 @@ impl Layout {
             Self::Rgba8 => Cow::Borrowed(bytes),
             Self::Bgra8 => {
                 let mut rgba = bytes.to_vec();
-                rgba.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+                for px in rgba.as_chunks_mut::<4>().0 {
+                    px.swap(0, 2);
+                }
                 Cow::Owned(rgba)
             }
             Self::A2b10g10r10 => Cow::Owned(unpack_10_bit(bytes, 0, 20)),
@@ -43,8 +45,8 @@ impl Layout {
 fn unpack_10_bit(bytes: &[u8], red_shift: u32, blue_shift: u32) -> Vec<u8> {
     let to_8_bit = |pixel: u32, shift: u32| (((pixel >> shift) & 0x3ff) >> 2) as u8;
     let mut rgba = Vec::with_capacity(bytes.len());
-    for chunk in bytes.chunks_exact(4) {
-        let pixel = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in bytes.as_chunks::<4>().0 {
+        let pixel = u32::from_le_bytes(*chunk);
         rgba.extend_from_slice(&[
             to_8_bit(pixel, red_shift),
             to_8_bit(pixel, 10),
