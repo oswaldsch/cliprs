@@ -39,6 +39,16 @@ pub fn secondary(_theme: &Theme, status: Status) -> Style {
     style(Some(background), text_color, outlined(border_color))
 }
 
+pub fn danger(_theme: &Theme, status: Status) -> Style {
+    let (background, text_color) = match status {
+        Status::Active => (color::DANGER, color::TEXT),
+        Status::Hovered => (color::DANGER.scale_alpha(0.85), color::TEXT),
+        Status::Pressed => (color::DANGER.scale_alpha(0.7), color::TEXT),
+        Status::Disabled => (color::OUTLINE, color::MUTED),
+    };
+    style(Some(background), text_color, border::rounded(radius::MD))
+}
+
 pub fn nav(selected: bool) -> impl Fn(&Theme, Status) -> Style {
     move |_theme, status| {
         let (background, text_color) = match status {

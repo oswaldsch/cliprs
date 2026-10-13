@@ -21,7 +21,7 @@ pub mod color {
     pub const ON_ACCENT: Color = BG;
     pub const SUCCESS: Color = color!(0x22C55E);
     pub const WARNING: Color = color!(0xF59E0B);
-    pub const DANGER: Color = color!(0xEF4444);
+    pub const DANGER: Color = color!(0xC94F4F);
     pub const SCRIM: Color = Color {
         a: 0.7,
         ..Color::BLACK

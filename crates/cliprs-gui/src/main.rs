@@ -10,18 +10,23 @@ use std::process::Command;
 use std::time::Duration;
 
 use cliprs_ipc::{Process, ResourceSample, Settings, install, notify_error};
+use iced::Length::Fill;
 use iced::futures::channel::oneshot;
-use iced::widget::space::vertical;
-use iced::widget::{button, column, container, row, rule};
-use iced::{Element, Length, Subscription, Task, Theme};
+use iced::widget::button::{Style, text};
+use iced::widget::space::{horizontal, vertical};
+use iced::widget::{button, center, column, container, mouse_area, opaque, row, rule, stack};
+use iced::{Alignment, Element, Length, Subscription, Task, Theme};
 
 use library::Clip;
 use settings::{BitrateOptions, DurationOptions, FPSOptions};
 
+use crate::Message::{DeleteCancelled, DeleteRequested};
 use crate::resources::construct_resource_tab;
 use crate::settings::HotkeyOptions;
+use crate::style::button::danger;
 use crate::style::icon::{self, Tint, icon};
-use crate::style::space;
+use crate::style::space::XS;
+use crate::style::{space, text};
 
 const DEBUG_SETUP: bool = false;
 const SIDEBAR_WIDTH: f32 = 220.0;
@@ -37,7 +42,9 @@ enum Message {
     ApplySettings,
     SettingsApplied(Result<(), String>),
     ClipClicked(PathBuf),
-    ClipDeleted(PathBuf, PathBuf, PathBuf),
+    DeleteRequested(PathBuf, PathBuf, PathBuf),
+    DeleteCancelled,
+    ClipDeleted,
     ResourceTick,
 }
 
@@ -72,6 +79,7 @@ struct State {
     clips: Vec<Clip>,
     resource_sample: Option<ResourceSample>,
     cpu_percent: Option<f32>,
+    pending_delete: Option<(PathBuf, PathBuf, PathBuf)>,
 }
 
 impl State {
@@ -83,6 +91,7 @@ impl State {
             clips: library::load_clips(),
             resource_sample: None,
             cpu_percent: None,
+            pending_delete: None,
         }
     }
 }
@@ -97,6 +106,46 @@ fn blocking_task(
     Task::perform(receiver, |result| {
         result.unwrap_or_else(|_| Err("background task stopped unexpectedly".into()))
     })
+}
+
+fn modal<'a, Message: Clone + 'a>(
+    base: impl Into<Element<'a, Message>>,
+    content: impl Into<Element<'a, Message>>,
+    on_blur: Message,
+) -> Element<'a, Message> {
+    stack![
+        base.into(),
+        opaque(mouse_area(center(opaque(content)).style(style::surface::scrim)).on_press(on_blur))
+    ]
+    .into()
+}
+
+fn delete_dialog() -> Element<'static, Message> {
+    container(
+        column![
+            column![
+                text::title("Delete clip?"),
+                text::label("This cannot be undone."),
+            ]
+            .spacing(space::XS),
+            row![
+                button(text::label("Cancel").center())
+                    .style(style::button::secondary)
+                    .on_press(Message::DeleteCancelled)
+                    .width(Length::Fill),
+                button(text::label("Delete").center())
+                    .style(style::button::danger)
+                    .on_press(Message::ClipDeleted)
+                    .width(Length::Fill),
+            ]
+            .spacing(space::SM)
+        ]
+        .spacing(space::LG),
+    )
+    .padding(space::LG)
+    .style(style::surface::card)
+    .width(400)
+    .into()
 }
 
 fn construct_sidebar_button(tab: SidebarTab, state: &State) -> Element<'_, Message> {
@@ -157,7 +206,13 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let divider = rule::vertical(style::STROKE).style(style::surface::divider);
 
-    container(row![sidebar_container, divider, main_view]).into()
+    let full_view: Element<Message, _> =
+        container(row![sidebar_container, divider, main_view]).into();
+
+    match &state.pending_delete {
+        Some((_, _, _)) => modal(full_view, delete_dialog(), Message::DeleteCancelled),
+        None => full_view.into(),
+    }
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -199,10 +254,16 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 notify_error(format!("Failed to open file: {error}"));
             }
         }
-        Message::ClipDeleted(video_path, meta_path, thumb_path) => {
-            let paths = [&video_path, &meta_path, &thumb_path];
-
-            for path in paths {
+        Message::DeleteRequested(video_path, meta_path, thumb_path) => {
+            state.pending_delete = Some((video_path, meta_path, thumb_path))
+        }
+        Message::DeleteCancelled => state.pending_delete = None,
+        Message::ClipDeleted => {
+            let paths = state.pending_delete.take();
+            for path in paths
+                .iter()
+                .flat_map(|(video, meta, thumb)| [video, meta, thumb])
+            {
                 match std::fs::remove_file(path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

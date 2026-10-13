@@ -184,11 +184,11 @@ fn clip_card(clip: &Clip) -> Element<'_, Message> {
             ))
             .padding(space::XS)
             .style(style::button::overlay)
-            .on_press(Message::ClipDeleted(
+            .on_press(Message::DeleteRequested(
                 clip.video_path.clone(),
                 clip.meta_path.clone(),
                 clip.thumbnail_path.clone(),
-            )) // TODO: add a modal (or similar) here, right now you can just accidentally delete a clip while sharing it
+            ))
         ]
         .padding(space::SM)
         .width(Length::Fill),

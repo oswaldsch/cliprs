@@ -17,6 +17,10 @@ pub fn panel(_theme: &Theme) -> Style {
     style(color::SURFACE, Border::default())
 }
 
+pub fn scrim(_theme: &Theme) -> Style {
+    style(color::SCRIM, Border::default())
+}
+
 pub fn divider(_theme: &Theme) -> rule::Style {
     rule::Style {
         color: color::OUTLINE,
