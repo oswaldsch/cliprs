@@ -12,7 +12,7 @@ To capture the KMS framebuffer, the daemon has to run as root. It only communica
 
 ## Limitations
 - Some monitor color formats still fail to parse, but the common ones should work
-- Audio is not yet supported
+- Audio is still pretty limited (WiP)
 
 ## License
 This project is licensed under GPLv3.
