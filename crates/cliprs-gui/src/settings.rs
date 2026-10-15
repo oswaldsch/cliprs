@@ -6,7 +6,6 @@ use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Element, Length};
 
 use crate::Message;
-use crate::style::icon::{self, Tint, icon};
 use crate::style::{self, space};
 
 const CONTROL_WIDTH: f32 = 260.0;
@@ -20,13 +19,13 @@ pub enum BitrateOptions {
 }
 
 impl BitrateOptions {
-    const ALL: &[BitrateOptions] = &[
+    pub const ALL: &[BitrateOptions] = &[
         BitrateOptions::Low,
         BitrateOptions::Medium,
         BitrateOptions::High,
     ];
 
-    fn average_bps(&self) -> u64 {
+    pub fn average_bps(&self) -> u64 {
         match self {
             BitrateOptions::Low => 10_000_000,
             BitrateOptions::Medium => 20_000_000,
@@ -62,14 +61,14 @@ pub enum FPSOptions {
 }
 
 impl FPSOptions {
-    const ALL: &[FPSOptions] = &[
+    pub const ALL: &[FPSOptions] = &[
         FPSOptions::Fps30,
         FPSOptions::Fps60,
         FPSOptions::Fps120,
         FPSOptions::Fps144,
     ];
 
-    fn value(&self) -> u32 {
+    pub fn value(&self) -> u32 {
         match self {
             FPSOptions::Fps30 => 30,
             FPSOptions::Fps60 => 60,
@@ -93,6 +92,44 @@ impl fmt::Display for FPSOptions {
             FPSOptions::Fps60 => write!(formatter, "60 FPS"),
             FPSOptions::Fps120 => write!(formatter, "120 FPS"),
             FPSOptions::Fps144 => write!(formatter, "144 FPS"),
+        }
+    }
+}
+
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub enum ResolutionOptions {
+    Res720,
+    Res1080,
+    #[default]
+    Res1440,
+    Res4k,
+}
+
+impl ResolutionOptions {
+    pub const ALL: &[ResolutionOptions] = &[
+        ResolutionOptions::Res720,
+        ResolutionOptions::Res1080,
+        ResolutionOptions::Res1440,
+        ResolutionOptions::Res4k,
+    ];
+
+    pub fn height(&self) -> u32 {
+        match self {
+            ResolutionOptions::Res720 => 720,
+            ResolutionOptions::Res1080 => 1080,
+            ResolutionOptions::Res1440 => 1440,
+            ResolutionOptions::Res4k => 2160,
+        }
+    }
+}
+
+impl fmt::Display for ResolutionOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            ResolutionOptions::Res720 => write!(formatter, "720p"),
+            ResolutionOptions::Res1080 => write!(formatter, "1080p"),
+            ResolutionOptions::Res1440 => write!(formatter, "1440p"),
+            ResolutionOptions::Res4k => write!(formatter, "4k"),
         }
     }
 }
@@ -276,29 +313,6 @@ where
         .into()
 }
 
-fn ram_infobox<'a>(typical: u64, peak: u64) -> Element<'a, Message> {
-    let figures = column![
-        style::text::title(format!(
-            "Your configuration will use about {typical} MB RAM"
-        )),
-        style::text::label(format!("Up to {peak} MB in very busy scenes")),
-    ]
-    .spacing(space::XS);
-
-    container(
-        row![
-            icon(include_bytes!("../assets/info.svg"), icon::MD, Tint::Accent),
-            figures
-        ]
-        .spacing(space::MD)
-        .align_y(Alignment::Start),
-    )
-    .style(style::surface::card)
-    .padding(space::MD)
-    .width(Length::Fill)
-    .into()
-}
-
 fn setting_row<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
     row![text(label).width(Length::Fill), control]
         .spacing(space::MD)
@@ -329,10 +343,12 @@ pub fn view(form: &Form, applying: bool) -> Element<'_, Message> {
             styled_pick_list(HotkeyOptions::ALL, form.hotkey, Message::HotkeyChanged)
         )
     ]
-    .extend(
-        form.estimate_ram_mb()
-            .map(|(typical, peak)| ram_infobox(typical, peak)),
-    )
+    .extend(form.estimate_ram_mb().map(|(typical, peak)| {
+        style::surface::infobox(
+            format!("Your configuration will use about {typical} MB RAM"),
+            format!("Up to {peak} MB in very busy scenes"),
+        )
+    }))
     .push(
         container(
             button("Apply")

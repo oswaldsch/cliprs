@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::io::{self, Write};
 
+use cliprs_ipc::AUDIO_BITRATE_BPS;
 use opus::{Application, Bitrate, Channels, Encoder};
 use pipewire as pw;
 use pw::properties::properties;
@@ -12,7 +13,6 @@ use spa::pod::Pod;
 use crate::audio::{CHANNELS, OPUS_MAX_FRAME_BYTES, SAMPLE_RATE, SAMPLES_PER_PACKET};
 
 const STREAM_NAME: &str = "cliprs";
-const BITRATE_BPS: i32 = 160_000;
 const BYTES_PER_SAMPLE: usize = size_of::<f32>();
 
 struct Capture {
@@ -48,7 +48,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let core = context.connect_rc(None)?;
 
     let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Stereo, Application::Audio)?;
-    encoder.set_bitrate(Bitrate::Bits(BITRATE_BPS))?;
+    encoder.set_bitrate(Bitrate::Bits(AUDIO_BITRATE_BPS as i32))?;
     let capture = Capture {
         encoder,
         pending: Vec::new(),

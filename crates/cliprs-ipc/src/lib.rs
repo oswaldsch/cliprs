@@ -39,6 +39,7 @@ const EDID_DESCRIPTOR_BYTES: usize = 18;
 const EDID_MONITOR_NAME_HEADER: [u8; 5] = [0, 0, 0, 0xFC, 0];
 const MAX_NOTIFICATION_BYTES: usize = 64 * 1024;
 const PEAK_TO_AVERAGE_BITRATE: u64 = 2;
+pub const AUDIO_BITRATE_BPS: u64 = 160_000;
 const DEFAULT_KEYCODE: &str = "KEY_F8";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

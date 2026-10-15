@@ -26,6 +26,27 @@ pub struct Clip {
     details: Option<String>,
     saved_at_unix_secs: Option<u64>,
     duration_secs: Option<f64>,
+    fps: Option<u32>,
+    resolution: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportSource {
+    pub video_path: PathBuf,
+    pub duration_secs: Option<f64>,
+    pub fps: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl Clip {
+    fn export_source(&self) -> ExportSource {
+        ExportSource {
+            video_path: self.video_path.clone(),
+            duration_secs: self.duration_secs,
+            fps: self.fps,
+            height: self.resolution.map(|(_, height)| height),
+        }
+    }
 }
 
 pub fn load_clips() -> Vec<Clip> {
@@ -72,6 +93,8 @@ fn load_clip(video_path: PathBuf) -> Clip {
         details,
         saved_at_unix_secs: meta.as_ref().map(|meta| meta.saved_at_unix_secs),
         duration_secs: meta.as_ref().map(|meta| meta.duration_secs),
+        fps: meta.as_ref().map(|meta| meta.fps),
+        resolution: meta.as_ref().map(|meta| (meta.width, meta.height)),
         title: meta
             .and_then(|meta| meta.title)
             .unwrap_or_else(|| String::from("Unnamed Clip")),
@@ -174,9 +197,10 @@ fn clip_card(clip: &Clip) -> Element<'_, Message> {
                 include_bytes!("../assets/share.svg"),
                 style::icon::SM,
                 Tint::Accent,
-            )) // TODO: implement share with compression modal or smth
+            ))
             .padding(space::XS)
-            .style(style::button::overlay),
+            .style(style::button::overlay)
+            .on_press(Message::ExportRequested(clip.export_source())),
             button(icon(
                 include_bytes!("../assets/trash.svg"),
                 style::icon::SM,

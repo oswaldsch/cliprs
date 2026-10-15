@@ -39,6 +39,33 @@ pub fn secondary(_theme: &Theme, status: Status) -> Style {
     style(Some(background), text_color, outlined(border_color))
 }
 
+pub fn segment(first: bool, last: bool, selected: bool) -> impl Fn(&Theme, Status) -> Style {
+    move |theme, status| {
+        let radius = match (first, last) {
+            (true, true) => border::radius(radius::MD),
+            (true, false) => border::left(radius::MD),
+            (false, true) => border::right(radius::MD),
+            (false, false) => border::radius(0),
+        };
+        let base = if selected {
+            style(
+                Some(accent(status)),
+                color::ON_ACCENT,
+                outlined(color::ACCENT),
+            )
+        } else {
+            secondary(theme, status)
+        };
+        Style {
+            border: Border {
+                radius,
+                ..base.border
+            },
+            ..base
+        }
+    }
+}
+
 pub fn danger(_theme: &Theme, status: Status) -> Style {
     let (background, text_color) = match status {
         Status::Active => (color::DANGER, color::TEXT),

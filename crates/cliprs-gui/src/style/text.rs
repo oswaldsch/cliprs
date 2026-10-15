@@ -35,6 +35,10 @@ pub fn label<'a>(content: impl IntoFragment<'a>) -> Text<'a> {
     text(content).size(LABEL).color(color::MUTED)
 }
 
+pub fn action<'a>(content: impl IntoFragment<'a>) -> Text<'a> {
+    text(content).size(LABEL)
+}
+
 pub fn value<'a>(content: impl IntoFragment<'a>) -> Text<'a> {
     text(content)
         .size(LABEL)
