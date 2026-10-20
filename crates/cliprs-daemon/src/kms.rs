@@ -75,6 +75,8 @@ impl Card {
             primary_planes: Vec::new(),
             connector: None,
         };
+        // first opener of a primary node with no master becomes drm master, which locks out the compositor
+        let _ = card.release_master_lock();
         card.set_client_capability(ClientCapability::UniversalPlanes, true)?;
         for p in card.plane_handles()? {
             if card.is_primary(p)? {
