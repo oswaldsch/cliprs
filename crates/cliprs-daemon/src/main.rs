@@ -23,6 +23,7 @@ use cliprs_ipc::{
 use evdev::KeyCode;
 
 const SINGLE_FRAME_DEBUG: bool = false;
+const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 fn save_clip(
     recording: &mut stitch::Recording,
@@ -50,11 +51,20 @@ fn recording_loop(
     let interval = Duration::from_secs_f64(1.0 / settings.fps as f64);
     let record_hotkey = hotkeys::hotkey_presses(KeyCode::from_str(&settings.keycode)?);
     let mut recording = stitch::Recording::new(vk, settings)?;
-    let start = Instant::now();
+    let mut start = Instant::now();
 
     let mut i = 0;
     loop {
-        let frame = capture::grab_frame(card).map_err(|e| format!("grab failed: {e}"))?;
+        let frame = match capture::grab_frame(card) {
+            Ok(frame) => frame,
+            Err(error) => {
+                log::warn!("no frame, retrying: {error}");
+                thread::sleep(RETRY_DELAY);
+                start = Instant::now();
+                i = 0;
+                continue;
+            }
+        };
         recording.add_frame(&frame)?;
         thread::sleep((start + interval * (i + 1)).saturating_duration_since(Instant::now()));
         if record_hotkey.try_recv().is_ok() {
