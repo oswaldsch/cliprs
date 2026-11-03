@@ -2,11 +2,13 @@ mod style;
 mod wayland;
 
 use std::error::Error;
+use std::process::Command;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-use cliprs_ipc::{InstanceLock, Notification, NotificationReceiver, Process};
+use cliprs_ipc::install::restart_daemon;
+use cliprs_ipc::{InstanceLock, Notification, NotificationReceiver, Process, clips_dir};
 use iced::futures::Stream;
 use iced::futures::channel::oneshot;
 use iced::widget::{column, container, row, space};
@@ -14,12 +16,14 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task};
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_layershell::settings::{LayerShellSettings, Settings};
 use iced_layershell::{application, to_layer_message};
+use ksni::blocking::TrayMethods;
 
 const NAMESPACE: &str = "cliprs-overlay";
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 const PENDING_NOTIFICATIONS: usize = 16;
 
 static RECEIVER: OnceLock<NotificationReceiver> = OnceLock::new();
+static TRAY: OnceLock<ksni::blocking::Handle<Tray>> = OnceLock::new();
 
 #[derive(Default)]
 struct Overlay {
@@ -49,6 +53,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         forward_to_desktop_notifications(&receiver);
     }
     let _ = RECEIVER.set(receiver);
+
+    match Tray.spawn() {
+        Ok(handle) => {
+            let _ = TRAY.set(handle);
+        }
+        Err(error) => log::warn!("no tray icon: {error}"),
+    }
 
     application(Overlay::default, namespace, update, view)
         .style(style::transparent_surface)
@@ -202,4 +213,84 @@ fn view(overlay: &Overlay) -> Element<'_, Message> {
         .height(Length::Fill)
         .clip(true)
         .into()
+}
+
+struct Tray;
+
+impl ksni::Tray for Tray {
+    fn id(&self) -> String {
+        "cliprs".into()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        vec![tray_icon()]
+    }
+
+    fn title(&self) -> String {
+        "cliprs".into()
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::StandardItem;
+        vec![
+            StandardItem {
+                label: "Open cliprs".into(),
+                activate: Box::new(|_| spawn_gui()),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Open clips folder".into(),
+                activate: Box::new(|_| open_clips_dir()),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Restart recorder".into(),
+                activate: Box::new(|_| _ = restart_daemon()),
+                ..Default::default()
+            }
+            .into(),
+        ]
+    }
+}
+
+fn open_clips_dir() {
+    let dir = match cliprs_ipc::clips_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!("no clips dir: {error}");
+            return;
+        }
+    };
+    let mut child = match Command::new("xdg-open").arg(&dir).spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            log::warn!("could not run xdg-open: {error}");
+            return;
+        }
+    };
+    thread::spawn(move || match child.wait() {
+        Ok(status) if !status.success() => {
+            log::warn!("xdg-open failed on {}: {status}", dir.display())
+        }
+        Err(error) => log::warn!("xdg-open: {error}"),
+        Ok(_) => {}
+    });
+}
+
+fn spawn_gui() {
+    let result =
+        cliprs_ipc::install::sibling_binary("cliprs-gui").and_then(|gui| Command::new(gui).spawn());
+    if let Err(error) = result {
+        log::warn!("could not open cliprs: {error}");
+    }
+}
+
+fn tray_icon() -> ksni::Icon {
+    ksni::Icon {
+        width: 64,
+        height: 64,
+        data: include_bytes!("../assets/tray-icon.argb").to_vec(),
+    }
 }

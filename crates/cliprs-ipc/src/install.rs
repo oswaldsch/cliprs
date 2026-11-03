@@ -197,7 +197,7 @@ fn unit_safe(path: &Path) -> io::Result<&str> {
         })
 }
 
-fn sibling_binary(name: &str) -> io::Result<PathBuf> {
+pub fn sibling_binary(name: &str) -> io::Result<PathBuf> {
     let path = env::current_exe()?.with_file_name(name);
     if !path.is_file() {
         return Err(io::Error::other(format!("{} is missing", path.display())));
