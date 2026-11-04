@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         env_logger::Env::default().default_filter_or("warn,cliprs_overlay=info,cliprs_ipc=info"),
     )
     .init();
-    // Taken before bind, which would otherwise unlink a running overlay's socket.
+    // bind unlinks a running overlay's socket, so take the lock first
     let _instance_lock = InstanceLock::acquire(Process::Overlay)
         .map_err(|error| format!("could not take overlay lock: {error}"))?;
     let receiver = NotificationReceiver::bind()
@@ -70,10 +70,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 anchor: Anchor::Top | Anchor::Right,
                 size: Some(style::SURFACE_SIZE),
                 margin: (
-                    style::SURFACE_MARGIN,
-                    style::SURFACE_MARGIN,
-                    style::SURFACE_MARGIN,
-                    style::SURFACE_MARGIN,
+                    style::SPACE_LG as i32,
+                    style::SPACE_LG as i32,
+                    style::SPACE_LG as i32,
+                    style::SPACE_LG as i32,
                 ),
                 keyboard_interactivity: KeyboardInteractivity::None,
                 events_transparent: true,
@@ -174,7 +174,7 @@ impl<'a> From<&'a Notification> for Toast<'a> {
             Notification::ClipSaved { .. } => Toast {
                 title: "Clip saved!",
                 details: "Find it in your cliprs library",
-                accent: style::SUCCESS,
+                accent: style::ACCENT,
                 icon: include_bytes!("../assets/circle-check.svg"),
             },
             Notification::Error { description } => Toast {
@@ -194,20 +194,17 @@ fn view(overlay: &Overlay) -> Element<'_, Message> {
     let toast = Toast::from(notification);
     let card = container(
         row![
-            style::icon_badge(toast.icon, toast.accent),
-            column![
-                style::toast_title(toast.title),
-                style::toast_details(toast.details)
-            ]
-            .spacing(style::TOAST_TEXT_SPACING)
-            .width(Length::Fill),
+            style::icon(toast.icon, toast.accent),
+            column![style::title(toast.title), style::label(toast.details)]
+                .spacing(style::SPACE_XS)
+                .width(Length::Fill),
         ]
-        .spacing(style::TOAST_SPACING)
-        .align_y(Alignment::Center),
+        .spacing(style::SPACE_MD)
+        .align_y(Alignment::Start),
     )
-    .padding(style::TOAST_PADDING)
+    .padding(style::SPACE_MD)
     .width(Length::Fill)
-    .style(style::toast);
+    .style(style::card);
     container(card)
         .width(Length::Fill)
         .height(Length::Fill)
