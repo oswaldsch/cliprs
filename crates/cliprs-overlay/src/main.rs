@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let _ = RECEIVER.set(receiver);
 
-    match Tray.spawn() {
+    match Tray.assume_sni_available(true).spawn() {
         Ok(handle) => {
             let _ = TRAY.set(handle);
         }
